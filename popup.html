@@ -189,32 +189,6 @@
     #closeConfirmDialog:hover {
       color: #dc3545 !important;
     }
-    #restoreMappingDialogBtn {
-      display: none;
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      z-index: 10001;
-      background-color: #0672ff;
-      color: white;
-      border: none;
-      border-radius: 50%;
-      width: 50px;
-      height: 50px;
-      font-size: 20px;
-      cursor: pointer;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-      transition: all 0.3s ease;
-      align-items: center;
-      justify-content: center;
-    }
-    #restoreMappingDialogBtn:hover {
-      background-color: #0059cc;
-      transform: scale(1.1);
-    }
-    #minimizeMappingPopupBtn:hover {
-      background-color: #5a6268;
-    }
   </style>
 </head>
 <body>
@@ -306,113 +280,7 @@
       </div>
     </div>
 
-    <!-- TAB 3: FIELD MAPPING -->
-    <div id="mappingContent" class="tab-pane">
-      <!-- Botón de minimizar siempre visible -->
-      <div style="display: flex; justify-content: flex-end; margin-bottom: 10px;">
-        <button id="minimizeMappingPopupBtn" title="Minimizar popup para interactuar con la página" style="background-color: #6c757d; color: white; border: none; border-radius: 4px; padding: 6px 12px; cursor: pointer; font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 5px;">
-          <span>−</span> Minimizar Popup
-        </button>
-      </div>
-      <div style="margin-bottom: 15px;">
-        <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
-          Press <strong>Ctrl+Shift+.</strong> on any page to open mapping mode, or select a field here.
-        </p>
-        <div style="margin-bottom: 10px;">
-          <label for="mappingType" style="font-weight: bold; display: block; margin-bottom: 5px;">Mapping Type:</label>
-          <select id="mappingType" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
-            <option value="capture">Capture (Read data from page)</option>
-            <option value="autofill">Autofill (Write data to forms)</option>
-          </select>
-        </div>
-        <div style="margin-bottom: 10px;">
-          <label for="mappingDomain" style="font-weight: bold; display: block; margin-bottom: 5px;">Domain:</label>
-          <input type="text" id="mappingDomain" placeholder="e.g: vueling.com" style="width: calc(100% - 20px); padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
-        </div>
-        <button id="loadMappingsBtn" style="width: 100%; margin-bottom: 15px;">Load Existing Mappings</button>
-      </div>
-      
-      <!-- Progress Indicator -->
-      <div id="mappingProgress" style="display: none; margin-bottom: 15px; padding: 10px; background: #f5f5f5; border-radius: 4px;">
-        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-          <span style="font-weight: bold; font-size: 12px;">Mapping Progress</span>
-          <span id="mappingProgressText" style="font-size: 12px; color: #666;">0 / 0 fields mapped</span>
-        </div>
-        <div style="width: 100%; height: 20px; background: #e0e0e0; border-radius: 10px; overflow: hidden;">
-          <div id="mappingProgressBar" style="height: 100%; background: linear-gradient(90deg, #28a745, #20c997); width: 0%; transition: width 0.3s ease;"></div>
-        </div>
-      </div>
-      
-      <div id="mappingFieldsContainer" style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 10px;">
-        <p class="status-text">Select a domain and load mappings to see the fields.</p>
-      </div>
-      
-      <!-- Batch Selection & Quick Mapping -->
-      <div style="margin-top: 15px; padding: 10px; background: #e6f7ff; border-radius: 4px; border: 1px solid #91d5ff;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-          <label style="display: flex; align-items: center; cursor: pointer;">
-            <input type="checkbox" id="batchSelectMode" style="margin-right: 8px;">
-            <span style="font-size: 12px; font-weight: bold;">Batch Select Mode</span>
-          </label>
-          <button id="mapSelectedBtn" style="display: none; padding: 6px 12px; font-size: 11px; background: #0672ff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
-            🗺️ Map Selected Fields
-          </button>
-        </div>
-        <label style="display: flex; align-items: center; cursor: pointer; margin-top: 8px;">
-          <input type="checkbox" id="quickMappingMode" style="margin-right: 8px;">
-          <span style="font-size: 12px; font-weight: bold;">Quick Mapping Mode</span>
-        </label>
-        <p style="font-size: 11px; color: #666; margin: 5px 0 0 0;">Select multiple fields and map them in sequence. Quick mode maps fields one after another.</p>
-      </div>
-      
-      <!-- Confirmation Dialog -->
-      <div id="mappingConfirmDialog" style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border: 2px solid #0672ff; border-radius: 8px; padding: 20px; z-index: 10000; box-shadow: 0 4px 20px rgba(0,0,0,0.3); max-width: 600px; width: 90%; max-height: 90vh; overflow-y: auto;">
-        <h3 style="margin-top: 0; color: #0672ff; display: flex; justify-content: space-between; align-items: center;">
-          <span>Confirm Mapping</span>
-          <div style="display: flex; gap: 5px;">
-            <button id="minimizeConfirmDialog" title="Minimizar" style="background: none; border: none; font-size: 20px; cursor: pointer; color: #999; padding: 0; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; transition: color 0.2s ease;">−</button>
-            <button id="closeConfirmDialog" title="Cerrar" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #999; padding: 0; width: 30px; height: 30px; transition: color 0.2s ease;">&times;</button>
-          </div>
-        </h3>
-        <div style="margin-bottom: 15px;">
-          <strong>Field:</strong> <span id="confirmFieldName"></span><br>
-          <strong>Type:</strong> <span id="confirmFieldType"></span><br>
-          <strong>Domain:</strong> <span id="confirmDomain"></span>
-        </div>
-        <div style="margin-bottom: 15px;">
-          <label style="display: block; font-weight: bold; margin-bottom: 5px;">
-            Selector Path <span style="font-size: 11px; color: #666;">(click to edit)</span>:
-          </label>
-          <code id="confirmSelector" contenteditable="false" style="display: block; background: #f5f5f5; padding: 8px; border-radius: 4px; margin: 5px 0; word-break: break-all; font-size: 12px; font-family: monospace; border: 1px solid #ddd; min-height: 40px; white-space: pre-wrap;"></code>
-          <button id="editSelectorBtn" style="margin-top: 5px; padding: 4px 8px; font-size: 11px; background: #6c757d; border: none; color: white; border-radius: 4px; cursor: pointer;">✏️ Edit Selector</button>
-        </div>
-        <div style="margin-bottom: 15px;">
-          <label style="display: block; font-weight: bold; margin-bottom: 5px;">Extraction Method:</label>
-          <select id="confirmExtractionMethod" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
-            <option value="textContent">textContent</option>
-            <option value="value">value (for inputs/selects)</option>
-            <option value="innerText">innerText</option>
-            <option value="data-value">data-value attribute</option>
-            <option value="data-id">data-id attribute</option>
-          </select>
-        </div>
-        <div style="margin-bottom: 15px;">
-          <strong>Example Value:</strong>
-          <code id="confirmValue" style="display: block; background: #e6ffe6; padding: 8px; border-radius: 4px; margin: 5px 0; word-break: break-all; font-size: 12px; font-family: monospace;"></code>
-          <button id="testSelectorBtn" style="margin-top: 5px; padding: 4px 8px; font-size: 11px; background: #17a2b8; border: none; color: white; border-radius: 4px; cursor: pointer;">✓ Test Selector</button>
-        </div>
-        <div id="selectorValidationResult" style="margin-bottom: 15px; padding: 8px; border-radius: 4px; display: none;"></div>
-        <div style="display: flex; gap: 10px; margin-top: 15px;">
-          <button id="confirmMappingBtn" style="flex: 1; background-color: #28a745; border-color: #28a745; color: white; padding: 10px; border-radius: 4px; cursor: pointer; font-weight: bold;">✓ Confirm & Save</button>
-          <button id="cancelMappingBtn" style="flex: 1; background-color: #dc3545; border-color: #dc3545; color: white; padding: 10px; border-radius: 4px; cursor: pointer; font-weight: bold;">✗ Cancel</button>
-        </div>
-      </div>
-    </div>
-
   </div>
-
-  <!-- Botón flotante para restaurar diálogo minimizado -->
-  <button id="restoreMappingDialogBtn" title="Restaurar diálogo de mapeo">📋</button>
 
   <!-- Modal de Disclaimer para dominio no mapeado -->
   <div id="domainNotMappedModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); z-index: 20000; align-items: center; justify-content: center;">

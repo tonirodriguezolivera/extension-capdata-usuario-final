@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Capturador de Reservas CapData", 
-  "version": "4.1", 
+  "version": "4.2", 
   "description": "Extensión para capturar datos de reservas de vuelo desde la página actual y enviarlos a la API de CapData.",
   "permissions": [
     "storage",      
@@ -26,7 +26,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["popup.html", "mapping.html"],
+      "resources": ["popup.html"],
       "matches": ["<all_urls>"]
     }
   ],
@@ -34,13 +34,5 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png" 
-  },
-  "commands": {
-    "open-mapping-window": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+Period"
-      },
-      "description": "Abrir ventana de mapeo"
-    }
   }
 }
