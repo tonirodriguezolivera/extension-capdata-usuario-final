@@ -1,0 +1,13 @@
+{
+  "name": "capdata-extension-obfuscator",
+  "version": "1.0.0",
+  "description": "Script de ofuscación para extensión CapData",
+  "scripts": {
+    "obfuscate": "node obfuscate.js",
+    "install-deps": "npm install"
+  },
+  "devDependencies": {
+    "javascript-obfuscator": "^4.1.0"
+  }
+}
+

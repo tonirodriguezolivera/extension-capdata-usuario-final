@@ -1,0 +1,29 @@
+
+CAMPOS A RECOGER:
+Dirección
+DNI / NIE
+Apellido 1
+Apellido 2
+Aerolinea (vuelta)
+Número de pasajeros (vuelta)
+Número de pasajeros
+Número de vuelo (vuelta)
+Aeropuerto de llegada (vuelta)
+Aeropuerto de salida (vuelta)
+Hora de salida (vuelta)
+Fecha de vuelta
+Aeropuerto de llegada (ida)
+Aeropuerto de salida (ida)
+Número de vuelo (ida)
+Aeropuerto de salida
+Hora de salida
+Fecha de la ida
+Código de la reserva
+Nombre del pasajero
+Aerolinea
+rent a car
+
+
+
+clientify token: 013bcc6029a37d5214e30b57284e840d3f7e7ef3
+capdata key: 0fa4d5973f38d9eb75b57f47b6f94917

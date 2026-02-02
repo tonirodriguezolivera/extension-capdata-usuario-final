@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Mapeo de Campos - CapData</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { 
+      font-family: Arial, sans-serif; 
+      margin: 0; 
+      padding: 15px; 
+      background-color: #ffffff; 
+      color: #333;
+      min-width: 500px;
+    }
+    #headerBar { 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+      margin-bottom: 15px;
+      border-bottom: 2px solid #0672ff;
+      padding-bottom: 10px;
+    }
+    #logoContainer { 
+      display: flex; 
+      align-items: center; 
+      gap: 10px;
+    }
+    #logoContainer img { width: 32px; height: 32px; }
+    h1 { margin: 0; color: #0672ff; font-size: 20px; }
+    #statusMessage { 
+      padding: 8px; 
+      border-radius: 4px; 
+      margin-bottom: 10px; 
+      text-align: center; 
+      display: none;
+    }
+    .status-success { background-color: #e6ffe6; color: #008000; }
+    .status-error { background-color: #ffe6e6; color: #cc0000; }
+    .status-info { background-color: #e6f7ff; color: #0056b3; }
+    
+    /* Indicador de progreso para búsqueda de selectores */
+    #aiSearchProgress {
+      display: none;
+      margin: 10px 0 0 0;
+      padding: 15px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: 8px;
+      text-align: center;
+      color: white;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    #aiSearchProgress.show {
+      display: block;
+    }
+    .spinner-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid rgba(255, 255, 255, 0.3);
+      border-top: 4px solid white;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .progress-text {
+      font-size: 14px;
+      font-weight: 500;
+      margin: 0;
+    }
+    .progress-subtext {
+      font-size: 12px;
+      opacity: 0.9;
+      margin: 5px 0 0 0;
+    }
+    
+    .form-group {
+      margin-bottom: 15px;
+    }
+    label {
+      font-weight: bold;
+      display: block;
+      margin-bottom: 5px;
+    }
+    input[type="text"], select {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    select {
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23333' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      padding-right: 30px;
+    }
+    button {
+      background-color: #0672ff;
+      color: white;
+      border: 2px solid #0672ff;
+      border-radius: 4px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: all 0.2s ease-in-out;
+      width: 100%;
+    }
+    button:hover {
+      background-color: #0059cc;
+      border-color: #0059cc;
+    }
+    button:disabled {
+      background-color: #ccc;
+      border-color: #ccc;
+      cursor: not-allowed;
+    }
+    
+    #mappingProgress {
+      display: none;
+      margin-bottom: 15px;
+      padding: 10px;
+      background: #f5f5f5;
+      border-radius: 4px;
+    }
+    #mappingProgressBar {
+      height: 20px;
+      background: linear-gradient(90deg, #28a745, #20c997);
+      width: 0%;
+      transition: width 0.3s ease;
+      border-radius: 10px;
+    }
+    
+    #mappingFieldsContainer {
+      max-height: 500px;
+      overflow-y: auto;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 10px;
+      margin-bottom: 15px;
+    }
+    
+    .mapping-field-item {
+      padding: 10px;
+      border-bottom: 1px solid #eee;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .mapping-field-item:hover {
+      background-color: #f5f5f5;
+    }
+    .mapping-field-item.mapped {
+      background-color: #e6ffe6;
+    }
+    
+    .batch-select-container {
+      margin-top: 15px;
+      padding: 10px;
+      background: #e6f7ff;
+      border-radius: 4px;
+      border: 1px solid #91d5ff;
+    }
+    
+    .status-text {
+      text-align: center;
+      color: #777;
+      padding: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="headerBar">
+    <div id="logoContainer">
+      <img src="icons/icon32.png" alt="Logo"/>
+      <h1>Mapeo de Campos</h1>
+    </div>
+  </div>
+  
+  <div id="statusMessage"></div>
+  
+  <div class="form-group">
+    <label for="mappingType">Tipo de Mapeo:</label>
+    <select id="mappingType">
+      <option value="capture">Capture (Leer datos de la página)</option>
+      <option value="autofill">Autofill (Escribir datos en formularios)</option>
+    </select>
+  </div>
+
+  <div class="form-group">
+    <label for="mappingServiceType">Tipo de Servicio:</label>
+    <select id="mappingServiceType">
+      <option value="aereo">Aéreo</option>
+      <option value="hotel">Hotel</option>
+      <option value="rent_a_car">Rent a Car</option>
+      <option value="tren">Tren</option>
+    </select>
+    <div id="onewayControl" style="display: none !important; visibility: hidden !important; opacity: 0 !important; position: absolute !important; z-index: -9999 !important;">
+      <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 0;">
+        <input type="checkbox" id="isOneWay" style="margin-right: 8px;">
+        <span style="font-size: 12px; font-weight: bold; color: #856404;">¿Es una reserva de SOLO IDA?</span>
+      </label>
+    </div>
+  </div>
+  
+  <div class="form-group">
+    <label for="mappingDomain">Dominio:</label>
+    <input type="text" id="mappingDomain" placeholder="ej: vueling.com">
+  </div>
+  
+  <button id="loadMappingsBtn">Cargar Mapeos Existentes</button>
+  <button id="deleteAllMappingsBtn" style="background-color: #fff; color: #dc3545; border-color: #dc3545; margin-top: 8px;">🗑️ Borrar todo el Mapeo de este Servicio</button>
+  <div id="mappingProgress" style="display: none;">
+    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+      <span style="font-weight: bold; font-size: 12px;">Progreso de Mapeo</span>
+      <span id="mappingProgressText" style="font-size: 12px; color: #666;">0 / 0 campos mapeados</span>
+    </div>
+    <div style="width: 100%; height: 20px; background: #e0e0e0; border-radius: 10px; overflow: hidden;">
+      <div id="mappingProgressBar"></div>
+    </div>
+  </div>
+  
+  <div id="mappingFieldsContainer">
+    <p class="status-text">Selecciona un dominio y carga los mapeos para ver los campos.</p>
+  </div>
+  
+  <div class="batch-select-container">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+      <label style="display: flex; align-items: center; cursor: pointer;">
+        <input type="checkbox" id="batchSelectMode" style="margin-right: 8px;">
+        <span style="font-size: 12px; font-weight: bold;">Modo Selección Múltiple</span>
+      </label>
+      <div style="display: flex; gap: 8px;">
+        <button id="findAIForSelectedBtn" style="display: none; width: auto; padding: 6px 12px; font-size: 11px; background-color: #9c27b0; color: white; border: none; border-radius: 4px; cursor: pointer;">
+          🤖 Buscar con IA
+        </button>
+        <button id="mapSelectedBtn" style="display: none; width: auto; padding: 6px 12px; font-size: 11px;">
+          🗺️ Mapear Campos Seleccionados
+        </button>
+      </div>
+    </div>
+    
+    <!-- Indicador de progreso para búsqueda de selectores con IA -->
+    <div id="aiSearchProgress">
+      <div class="spinner-container">
+        <div class="spinner"></div>
+        <p class="progress-text" id="aiSearchProgressText">Buscando selectores con IA...</p>
+        <p class="progress-subtext" id="aiSearchProgressSubtext">Esto puede tardar unos segundos</p>
+      </div>
+    </div>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+      <label style="display: flex; align-items: center; cursor: pointer;">
+        <input type="checkbox" id="selectAllFields" style="margin-right: 8px;">
+        <span style="font-size: 12px; font-weight: bold;">Seleccionar Todos los Campos</span>
+      </label>
+    </div>
+    <label style="display: flex; align-items: center; cursor: pointer;">
+      <input type="checkbox" id="quickMappingMode" style="margin-right: 8px;">
+      <span style="font-size: 12px; font-weight: bold;">Modo Mapeo Rápido</span>
+    </label>
+    <p style="font-size: 11px; color: #666; margin: 5px 0 0 0;">Selecciona múltiples campos y mápealos en secuencia. El modo rápido mapea campos uno tras otro. Usa "Buscar con IA" para encontrar selectores de todos los campos seleccionados a la vez.</p>
+  </div>
+
+  <script src="mapping.js"></script>
+</body>
+</html>
+

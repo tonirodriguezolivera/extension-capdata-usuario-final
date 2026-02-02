@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Asistente de Reservas</title>
+  <style>
+    /* --- ESTILOS GENERALES (SIN CAMBIOS) --- */
+    html, body { font-family: Arial, sans-serif; margin: 0; padding: 15px; padding-bottom: 60px; min-width: 400px; max-width: 100%; width: 100%; color: #333; background-color: #ffffff; overflow-x: hidden; overflow-y: auto; position: relative; box-sizing: border-box; height: auto; min-height: 100%;}
+    #headerBar { display: flex; justify-content: space-between; align-items: center; }
+    #logoContainer { justify-content: flex-start; margin-bottom: 0; }
+    #closeBtn { border: none; background: none; font-size: 24px; font-weight: bold; color: #888; cursor: pointer; padding: 0 5px; line-height: 1; }
+    #closeBtn:hover { color: #333; }
+    #logoContainer img { width: 120px; }
+    #apiKeyContainer { margin-bottom: 10px; }
+    #apiKeyContainer label { font-weight: bold; margin-bottom: 5px; display: block; }
+    #apiKeyInputRow { display: flex; gap: 8px; align-items: center; }
+    #apiKeyInputRow input[type="text"] { flex: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    input[type="text"] { width: calc(100% - 20px); padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    select { width: calc(100% - 20px); padding: 8px; border: 1px solid #ccc; border-radius: 4px; background-color: #fff; font-size: 14px; cursor: pointer; appearance: none; -webkit-appearance: none; -moz-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23333' d='M6 9L1 4h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 8px center; padding-right: 30px; }
+    select:hover { border-color: #0672ff; }
+    select:focus { outline: none; border-color: #0672ff; box-shadow: 0 0 0 2px rgba(6, 114, 255, 0.2); }
+    button { background-color: #0672ff; color: white; border: 2px solid #0672ff; border-radius: 4px; padding: 8px 12px; cursor: pointer; font-weight: bold; transition: all 0.2s ease-in-out; }
+    button:hover { background-color: #0059cc; border-color: #0059cc; }
+    button:disabled { background-color: #ccc; border-color: #ccc; cursor: not-allowed; }
+    #saveApiKeyBtn { background-color: #fff; color: #0672ff; padding: 8px 12px; flex-shrink: 0; white-space: nowrap;}
+    #saveApiKeyBtn:hover { background-color: #0672ff; color: #fff; }
+    .status-success { background-color: #e6ffe6; color: #008000; }
+    .status-error { background-color: #ffe6e6; color: #cc0000; }
+    .status-info { background-color: #e6f7ff; color: #0056b3; }
+    #statusMessage { padding: 8px; border-radius: 4px; margin-bottom: 10px; text-align: center; }
+
+    /* --- NUEVOS ESTILOS PARA PESTAÑAS --- */
+    .tab-nav {
+      display: flex;
+      border-bottom: 1px solid #ccc;
+      margin-bottom: 15px;
+    }
+    .tab-btn {
+      background: none;
+      border: none;
+      padding: 10px 15px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: bold;
+      color: #555;
+      border-bottom: 3px solid transparent;
+      margin-bottom: -1px; /* Para que el borde se alinee con la línea de abajo */
+    }
+    .tab-btn:hover {
+      background-color: #f0f0f0;
+      color: #000;
+    }
+    .tab-btn.active {
+      color: #0672ff;
+      border-bottom-color: #0672ff;
+    }
+    .tab-pane {
+      display: none; /* Ocultamos los paneles por defecto */
+    }
+    .tab-pane.active {
+      display: block; /* Mostramos solo el activo */
+    }
+
+    /* --- ESTILOS DE LA PESTAÑA DE CAPTURA (SIN CAMBIOS) --- */
+    #buttonSpinnerRow { margin-bottom: 15px; display: flex; flex-direction: column; align-items: center; }
+    #capturarReserva { width: 100%; padding: 12px 0; font-size: 16px; }
+    #spinnerContainer { display: none; margin-top: 10px; }
+    .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    #formContainer { max-height: 600px; overflow-y: auto; }
+    .reservation-form-wrapper { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 16px; background-color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .reservation-form-wrapper:last-child { margin-bottom: 0; }
+    .reservation-form-wrapper h3 { margin-top: 0; margin-bottom: 16px; font-size: 16px; color: #0672ff; border-bottom: 1px solid #eee; padding-bottom: 8px; }
+    .fields-grid-container { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+    .field-group { margin-bottom: 8px; display: flex; flex-direction: column; }
+    .field-group label { font-weight: bold; font-size: 12px; margin-bottom: 2px; }
+    .field-group-switch, .field-group-details { grid-column: 1 / -1; }
+    .avsis-fields-container { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #ccc; }
+    .avsis-fields-container a { display: block; text-align: right; margin-bottom: 12px; font-size: 12px; color: #0672ff; }
+    .gesintur-fields-container { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #ccc; }
+    .gesintur-fields-container a { display: block; text-align: right; margin-bottom: 12px; font-size: 12px; color: #0672ff; }
+    .pipeline-fields-container { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #ccc; }
+    .pipeline-fields-container a { display: block; text-align: right; margin-bottom: 12px; font-size: 12px; color: #0672ff; }
+    .required-error { border: 2px solid #dc3545 !important; background-color: #fff5f5 !important; }
+    .error-message { color: #dc3545; font-size: 11px; display: block; margin-top: 4px; font-weight: normal; }
+    .save-single-reservation-btn { width: 100%; margin-top: 16px; background-color: #28a745; border-color: #28a745; }
+    .save-single-reservation-btn:hover { background-color: #218838; border-color: #218838; }
+    .field-group-switch { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0;}
+    .field-group-switch label {flex-grow: 1; }
+    .switch { position: relative; display: inline-block; width: 50px; height: 28px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; }
+    .slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 4px; background-color: white; transition: .4s; }
+    input:checked + .slider { background-color: #28a745; }
+    input:checked + .slider:before { transform: translateX(22px); }
+    .slider.round { border-radius: 34px; }
+    .slider.round:before { border-radius: 50%; }
+    .field-group-details summary { cursor: pointer; font-weight: bold; color: #0672ff; outline: none; padding: 4px 0; }
+    .passenger-list { padding-left: 20px; margin-top: 10px; border-left: 2px solid #eee; }
+    .passenger-item { margin-bottom: 5px; font-size: 13px; }
+    #globalActionsRow { margin-bottom: 15px; display: flex; justify-content: flex-end; }
+    #clearBtn { background-color: #fff; border-color: #dc3545; color: #dc3545; font-weight: bold; margin-right: 3px;}
+    #clearBtn:hovder { background-color: #c82333; border-color: #c82333; color: #fff;}
+    
+    /* --- ESTILOS PESTAÑA DE LLENADO --- */
+    #contactToolbar { margin-bottom: 10px; }
+    #contactFilterActionRow { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+    #contactFilterActionRow #contactFilterInput { flex: 1; padding: 8px; border: 2px solid #ccc; border-radius: 4px; font-size: 16px; line-height: 1.5; }
+    #contactFilterActionRow #fillWithContactBtn { flex: 1; font-size: 16px; background-color: #28a745; border-color: #28a745; white-space: nowrap; line-height: 1.5; }
+    #contactTableContainer { min-height: 200px; max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; }
+    .contact-row { padding: 8px 12px; border-bottom: 1px solid #eee; cursor: pointer; transition: background-color 0.2s; }
+    .contact-row:last-child { border-bottom: none; }
+    .contact-row:hover { background-color: #f7f7f7; }
+    .contact-row.selected { background-color: #e6f7ff; border-left: 3px solid #0672ff; font-weight: bold;}
+    .contact-row small { color: #555; font-weight: normal; }
+    #contactPagination { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; }
+    #contactPagination button { padding: 4px 8px; font-size: 12px; }
+    #contactAction { margin-bottom: 15px; }
+    #fillWithContactBtn { width: 100%; font-size: 16px; background-color: #28a745; border-color: #28a745;}
+    #fillWithContactBtn:hover { background-color: #218838; border-color: #218838; }
+    .status-text { text-align: center; color: #777; padding: 20px; }
+    
+    /* --- ESTILOS PARA SELECTOR DE TIPO DE RESERVA --- */
+    #reservationTypeContainer, #orbiswebTypeContainer {
+      position: relative;
+      z-index: 1;
+      margin-bottom: 15px;
+    }
+    
+    #reservationTypeContainer label, #orbiswebTypeContainer label {
+      font-weight: bold;
+      display: block;
+      margin-bottom: 5px;
+    }
+    
+    #reservationType, #orbiswebType {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background-color: #fff;
+      font-size: 14px;
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23333' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      padding-right: 30px;
+    }
+    .folder-row {
+        background-color: #fff8e1; /* Un color amarillento suave */
+        color: #d35400;
+        font-weight: bold;
+        padding: 10px 12px;
+        border-bottom: 1px solid #eee;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .folder-row:hover {
+        background-color: #ffe0b2;
+    }
+    .folder-icon {
+        font-size: 16px;
+    }
+    
+    #reservationType:hover, #orbiswebType:hover {
+      border-color: #0672ff;
+    }
+    
+    #reservationType:focus, #orbiswebType:focus {
+      outline: none;
+      border-color: #0672ff;
+      box-shadow: 0 0 0 2px rgba(6, 114, 255, 0.2);
+    }
+    
+    #reservationType option, #orbiswebType option {
+      padding: 8px;
+      background-color: #fff;
+    }
+    
+    /* Estilos para botón de minimizar y restaurar */
+    #minimizeConfirmDialog:hover {
+      color: #0672ff !important;
+    }
+    #closeConfirmDialog:hover {
+      color: #dc3545 !important;
+    }
+    #restoreMappingDialogBtn {
+      display: none;
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 10001;
+      background-color: #0672ff;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 50px;
+      height: 50px;
+      font-size: 20px;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      transition: all 0.3s ease;
+      align-items: center;
+      justify-content: center;
+    }
+    #restoreMappingDialogBtn:hover {
+      background-color: #0059cc;
+      transform: scale(1.1);
+    }
+    #minimizeMappingPopupBtn:hover {
+      background-color: #5a6268;
+    }
+  </style>
+</head>
+<body>
+  <!-- CABECERA Y API KEY (COMÚN) -->
+  <div id="headerBar">
+    <div id="logoContainer"><img src="icons/Logotipo.png" alt="Logo"/></div>
+    <button id="closeBtn" title="Cerrar">&times;</button>
+  </div>
+  <div id="apiKeyContainer">
+    <label for="apiKey">API Key:</label>
+    <div id="apiKeyInputRow">
+      <input type="text" id="apiKey" placeholder="Ingresa tu API Key"/>
+      <button id="saveApiKeyBtn">Guardar API Key</button>
+    </div>
+  </div>
+  <div id="statusMessage" style="display: none;"></div>
+
+  <!-- TAB NAVIGATION -->
+  <div class="tab-nav">
+    <button class="tab-btn" data-tab="fillContent">Autorellenado</button>
+    <button class="tab-btn active" data-tab="captureContent">Captura</button>
+  </div>
+
+  <!-- CONTENEDOR DE PANELES -->
+  <div id="tabContent">
+    
+    <!-- PESTAÑA 1: LLENADO -->
+    <div id="fillContent" class="tab-pane">
+        <!-- 1. FILTRO Y BOTÓN DE RELLENAR EN LA MISMA LÍNEA -->
+        <div id="contactFilterActionRow">
+            <input type="text" id="contactFilterInput" placeholder="Filtrar por nombre, email...">
+            <button id="fillWithContactBtn" disabled>Rellenar con Contacto Seleccionado</button>
+        </div>
+        
+        <!-- 2. BARRA DE HERRAMIENTAS -->
+        <div id="contactToolbar">
+            <!-- Barra de navegación carpetas (Oculta por defecto) -->
+            <div id="folderNavBar" style="display: none; margin-bottom: 8px; align-items: center; padding-bottom: 5px; border-bottom: 1px solid #eee;">
+                <button id="backToRootBtn" style="padding: 4px 8px; font-size: 12px; margin-right: 8px; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 4px;">
+                    ⬅ Atrás
+                </button>
+                <strong id="currentFolderName" style="font-size: 14px; color: #0672ff;"></strong>
+            </div>
+        </div>
+
+        <!-- 3. TABLA DE CONTACTOS -->
+        <div id="contactTableContainer">
+            <p class="status-text">Introduce tu API Key para cargar los contactos.</p>
+        </div>
+        
+        <!-- 4. PAGINACIÓN -->
+        <div id="contactPagination">
+            <button id="prevContactPageBtn" disabled>&laquo; Anterior</button>
+            <span id="contactPageIndicator">Página 0 de 0</span>
+            <button id="nextContactPageBtn" disabled>Siguiente &raquo;</button>
+        </div>
+    </div>
+
+    <!-- PESTAÑA 2: CAPTURA -->
+    <div id="captureContent" class="tab-pane active">
+      <div id="serviceTypeSelectionContainer" class="section" style="margin-bottom: 15px;">
+        <label for="mainServiceType" style="font-weight: bold; display: block; margin-bottom: 5px;">Tipo de Servicio:</label>
+        <select id="mainServiceType" style="width: 100%; padding: 10px; border: 2px solid #0672ff; border-radius: 6px;">
+            <option value="aereo" selected>Aéreo</option>
+        </select>
+        <small id="serviceTypeError" style="color: #dc3545; display: none; font-size: 11px; margin-top: 5px; font-weight: bold;">
+            ⚠️ Debes seleccionar un tipo de servicio antes de capturar.
+        </small>
+    </div>
+      <div id="buttonSpinnerRow">
+        <button id="capturarReserva">Capturar Datos</button>
+        <div id="spinnerContainer"><div class="spinner"></div></div>
+      </div>
+      <div id="reservationTypeContainer" style="display: none;">
+        <label for="reservationType">Tipo de Reserva:</label>
+        <select id="reservationType">
+          <option value="">-- Selecciona un tipo --</option>
+          <option value="billetaje">Billetaje</option>
+          <option value="aereo">Aéreo</option>
+        </select>
+      </div>
+      <div id="globalActionsRow" style="display: none; justify-content: space-between; gap: 10px;">
+        <button id="saveAllBtn" title="Guardar todas las reservas nuevas. Esta acción consumirá 1 token." style="background-color: #28a745; border-color: #28a745; flex-grow: 2;">✅ Guardar Todo</button>
+        <button id="discardBtn" title="Descartar resultados y empezar de nuevo" style="background-color: #dc3545; border-color: #dc3545; flex-grow: 1;">❌ Descartar</button>
+        <button id="clearBtn" title="Limpiar la vista para una nueva captura" style="display: none;">🧹 Limpiar Captura</button>
+    </div>
+      <div id="formContainer" style="display: none;">
+        <div id="standardFieldsContainer"></div>
+      </div>
+    </div>
+
+    <!-- TAB 3: FIELD MAPPING -->
+    <div id="mappingContent" class="tab-pane">
+      <!-- Botón de minimizar siempre visible -->
+      <div style="display: flex; justify-content: flex-end; margin-bottom: 10px;">
+        <button id="minimizeMappingPopupBtn" title="Minimizar popup para interactuar con la página" style="background-color: #6c757d; color: white; border: none; border-radius: 4px; padding: 6px 12px; cursor: pointer; font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 5px;">
+          <span>−</span> Minimizar Popup
+        </button>
+      </div>
+      <div style="margin-bottom: 15px;">
+        <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
+          Press <strong>Ctrl+Shift+.</strong> on any page to open mapping mode, or select a field here.
+        </p>
+        <div style="margin-bottom: 10px;">
+          <label for="mappingType" style="font-weight: bold; display: block; margin-bottom: 5px;">Mapping Type:</label>
+          <select id="mappingType" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+            <option value="capture">Capture (Read data from page)</option>
+            <option value="autofill">Autofill (Write data to forms)</option>
+          </select>
+        </div>
+        <div style="margin-bottom: 10px;">
+          <label for="mappingDomain" style="font-weight: bold; display: block; margin-bottom: 5px;">Domain:</label>
+          <input type="text" id="mappingDomain" placeholder="e.g: vueling.com" style="width: calc(100% - 20px); padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+        </div>
+        <button id="loadMappingsBtn" style="width: 100%; margin-bottom: 15px;">Load Existing Mappings</button>
+      </div>
+      
+      <!-- Progress Indicator -->
+      <div id="mappingProgress" style="display: none; margin-bottom: 15px; padding: 10px; background: #f5f5f5; border-radius: 4px;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+          <span style="font-weight: bold; font-size: 12px;">Mapping Progress</span>
+          <span id="mappingProgressText" style="font-size: 12px; color: #666;">0 / 0 fields mapped</span>
+        </div>
+        <div style="width: 100%; height: 20px; background: #e0e0e0; border-radius: 10px; overflow: hidden;">
+          <div id="mappingProgressBar" style="height: 100%; background: linear-gradient(90deg, #28a745, #20c997); width: 0%; transition: width 0.3s ease;"></div>
+        </div>
+      </div>
+      
+      <div id="mappingFieldsContainer" style="max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 10px;">
+        <p class="status-text">Select a domain and load mappings to see the fields.</p>
+      </div>
+      
+      <!-- Batch Selection & Quick Mapping -->
+      <div style="margin-top: 15px; padding: 10px; background: #e6f7ff; border-radius: 4px; border: 1px solid #91d5ff;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+          <label style="display: flex; align-items: center; cursor: pointer;">
+            <input type="checkbox" id="batchSelectMode" style="margin-right: 8px;">
+            <span style="font-size: 12px; font-weight: bold;">Batch Select Mode</span>
+          </label>
+          <button id="mapSelectedBtn" style="display: none; padding: 6px 12px; font-size: 11px; background: #0672ff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
+            🗺️ Map Selected Fields
+          </button>
+        </div>
+        <label style="display: flex; align-items: center; cursor: pointer; margin-top: 8px;">
+          <input type="checkbox" id="quickMappingMode" style="margin-right: 8px;">
+          <span style="font-size: 12px; font-weight: bold;">Quick Mapping Mode</span>
+        </label>
+        <p style="font-size: 11px; color: #666; margin: 5px 0 0 0;">Select multiple fields and map them in sequence. Quick mode maps fields one after another.</p>
+      </div>
+      
+      <!-- Confirmation Dialog -->
+      <div id="mappingConfirmDialog" style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; border: 2px solid #0672ff; border-radius: 8px; padding: 20px; z-index: 10000; box-shadow: 0 4px 20px rgba(0,0,0,0.3); max-width: 600px; width: 90%; max-height: 90vh; overflow-y: auto;">
+        <h3 style="margin-top: 0; color: #0672ff; display: flex; justify-content: space-between; align-items: center;">
+          <span>Confirm Mapping</span>
+          <div style="display: flex; gap: 5px;">
+            <button id="minimizeConfirmDialog" title="Minimizar" style="background: none; border: none; font-size: 20px; cursor: pointer; color: #999; padding: 0; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; transition: color 0.2s ease;">−</button>
+            <button id="closeConfirmDialog" title="Cerrar" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #999; padding: 0; width: 30px; height: 30px; transition: color 0.2s ease;">&times;</button>
+          </div>
+        </h3>
+        <div style="margin-bottom: 15px;">
+          <strong>Field:</strong> <span id="confirmFieldName"></span><br>
+          <strong>Type:</strong> <span id="confirmFieldType"></span><br>
+          <strong>Domain:</strong> <span id="confirmDomain"></span>
+        </div>
+        <div style="margin-bottom: 15px;">
+          <label style="display: block; font-weight: bold; margin-bottom: 5px;">
+            Selector Path <span style="font-size: 11px; color: #666;">(click to edit)</span>:
+          </label>
+          <code id="confirmSelector" contenteditable="false" style="display: block; background: #f5f5f5; padding: 8px; border-radius: 4px; margin: 5px 0; word-break: break-all; font-size: 12px; font-family: monospace; border: 1px solid #ddd; min-height: 40px; white-space: pre-wrap;"></code>
+          <button id="editSelectorBtn" style="margin-top: 5px; padding: 4px 8px; font-size: 11px; background: #6c757d; border: none; color: white; border-radius: 4px; cursor: pointer;">✏️ Edit Selector</button>
+        </div>
+        <div style="margin-bottom: 15px;">
+          <label style="display: block; font-weight: bold; margin-bottom: 5px;">Extraction Method:</label>
+          <select id="confirmExtractionMethod" style="width: 100%; padding: 6px; border: 1px solid #ccc; border-radius: 4px;">
+            <option value="textContent">textContent</option>
+            <option value="value">value (for inputs/selects)</option>
+            <option value="innerText">innerText</option>
+            <option value="data-value">data-value attribute</option>
+            <option value="data-id">data-id attribute</option>
+          </select>
+        </div>
+        <div style="margin-bottom: 15px;">
+          <strong>Example Value:</strong>
+          <code id="confirmValue" style="display: block; background: #e6ffe6; padding: 8px; border-radius: 4px; margin: 5px 0; word-break: break-all; font-size: 12px; font-family: monospace;"></code>
+          <button id="testSelectorBtn" style="margin-top: 5px; padding: 4px 8px; font-size: 11px; background: #17a2b8; border: none; color: white; border-radius: 4px; cursor: pointer;">✓ Test Selector</button>
+        </div>
+        <div id="selectorValidationResult" style="margin-bottom: 15px; padding: 8px; border-radius: 4px; display: none;"></div>
+        <div style="display: flex; gap: 10px; margin-top: 15px;">
+          <button id="confirmMappingBtn" style="flex: 1; background-color: #28a745; border-color: #28a745; color: white; padding: 10px; border-radius: 4px; cursor: pointer; font-weight: bold;">✓ Confirm & Save</button>
+          <button id="cancelMappingBtn" style="flex: 1; background-color: #dc3545; border-color: #dc3545; color: white; padding: 10px; border-radius: 4px; cursor: pointer; font-weight: bold;">✗ Cancel</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Botón flotante para restaurar diálogo minimizado -->
+  <button id="restoreMappingDialogBtn" title="Restaurar diálogo de mapeo">📋</button>
+
+  <!-- Modal de Disclaimer para dominio no mapeado -->
+  <div id="domainNotMappedModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); z-index: 20000; align-items: center; justify-content: center;">
+    <div style="background: white; border: 2px solid #dc3545; border-radius: 8px; padding: 25px; max-width: 500px; width: 90%; box-shadow: 0 4px 20px rgba(0,0,0,0.3); text-align: center;">
+      <div style="margin-bottom: 20px;">
+        <div style="font-size: 48px; margin-bottom: 15px;">⚠️</div>
+        <h3 style="margin: 0 0 15px 0; color: #dc3545; font-size: 20px;">Portal Web No Operativo</h3>
+        <p id="domainNotMappedMessage" style="margin: 0; color: #333; font-size: 14px; line-height: 1.6;">
+          Este portal web no está operativo. Por favor, contacte a Capdata para solicitar la incorporación de este portal web.
+        </p>
+        <p style="margin: 15px 0 0 0; color: #0672ff; font-size: 14px; font-weight: bold;">
+          📧 info@capdata.es
+        </p>
+      </div>
+      <button id="closeDomainNotMappedModal" style="background-color: #dc3545; border-color: #dc3545; color: white; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 14px;">
+        Entendido
+      </button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
