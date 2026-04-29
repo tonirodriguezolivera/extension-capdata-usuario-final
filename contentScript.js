@@ -1,3 +1,4 @@
+
 // Guard to prevent multiple injections
 if (window.capdataContentScriptLoaded) {
     console.log('CapData content script already loaded, skipping re-injection');
@@ -6,10 +7,50 @@ if (window.capdataContentScriptLoaded) {
 
 const IFRAME_ID = 'capdata-reserva-iframe';
 const RESIZE_HANDLE_ID = 'capdata-resize-handle';
+const DRAG_HANDLE_ID = 'capdata-drag-handle';
 let iframe = null;
 let resizeHandle = null;
+let dragHandle = null;
 let isResizing = false;
+let isDragging = false;
 let startX, startY, startWidth, startHeight;
+let dragStartX, dragStartY, dragStartTop, dragStartLeft;
+let uiEventHandlersBound = false;
+
+function clampContainerPosition(container) {
+    if (!container) return;
+    const margin = 10;
+    const rect = container.getBoundingClientRect();
+    const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+    const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+    const currentLeft = parseFloat(container.style.left || `${rect.left}`) || margin;
+    const currentTop = parseFloat(container.style.top || `${rect.top}`) || margin;
+    const clampedLeft = Math.min(Math.max(currentLeft, margin), maxLeft);
+    const clampedTop = Math.min(Math.max(currentTop, margin), maxTop);
+    container.style.left = `${clampedLeft}px`;
+    container.style.top = `${clampedTop}px`;
+}
+
+function handleViewportResize() {
+    const currentContainer = document.getElementById('capdata-reserva-container');
+    clampContainerPosition(currentContainer);
+}
+
+function forceStopPointerInteractions() {
+    isDragging = false;
+    isResizing = false;
+}
+
+function bindUIEventHandlers() {
+    if (uiEventHandlersBound) return;
+    document.addEventListener('mousemove', doResize);
+    document.addEventListener('mousemove', doDrag);
+    document.addEventListener('mouseup', stopResize);
+    document.addEventListener('mouseup', stopDrag);
+    window.addEventListener('resize', handleViewportResize);
+    window.addEventListener('blur', forceStopPointerInteractions);
+    uiEventHandlersBound = true;
+}
 
 function createUI() {
     if (document.getElementById(IFRAME_ID)) {
@@ -21,9 +62,9 @@ function createUI() {
     container.id = 'capdata-reserva-container';
     container.style.position = 'fixed';
     container.style.top = '10px';
-    container.style.right = '10px';
     container.style.width = '700px';
     container.style.height = '800px';
+    container.style.left = `${Math.max(10, window.innerWidth - 710)}px`;
     // Asegurar que no exceda la altura de la ventana (10px arriba + 10px abajo = 20px total)
     container.style.maxHeight = 'calc(100vh - 20px)';
     container.style.zIndex = '999999';
@@ -35,6 +76,24 @@ function createUI() {
     container.style.overflow = 'hidden';
     container.style.backgroundColor = '#fff';
 
+    // Barra de arrastre para mover el panel por la página.
+    dragHandle = document.createElement('div');
+    dragHandle.id = DRAG_HANDLE_ID;
+    dragHandle.style.height = '30px';
+    dragHandle.style.display = 'flex';
+    dragHandle.style.alignItems = 'center';
+    dragHandle.style.justifyContent = 'space-between';
+    dragHandle.style.padding = '0 10px';
+    dragHandle.style.background = 'linear-gradient(180deg, #f8f9fa, #eef2f7)';
+    dragHandle.style.borderBottom = '1px solid #d8dee8';
+    dragHandle.style.cursor = 'move';
+    dragHandle.style.userSelect = 'none';
+    dragHandle.style.fontFamily = 'Arial, sans-serif';
+    dragHandle.style.fontSize = '12px';
+    dragHandle.style.color = '#555';
+    dragHandle.innerHTML = '<span style="font-weight:600;">Asistente CapData</span><span style="opacity:.7;">Arrastrar</span>';
+    dragHandle.title = 'Arrastra para mover';
+
     iframe = document.createElement('iframe');
     iframe.id = IFRAME_ID;
     iframe.src = chrome.runtime.getURL('popup.html');
@@ -45,21 +104,21 @@ function createUI() {
     iframe.style.minHeight = '0';
     iframe.style.overflow = 'auto'; // Permitir scroll si el contenido es más grande
 
-    // Crear handle de redimensionamiento en la esquina inferior izquierda
+    // Crear handle de redimensionamiento en la esquina inferior derecha.
     resizeHandle = document.createElement('div');
     resizeHandle.id = RESIZE_HANDLE_ID;
     resizeHandle.style.width = '24px';
     resizeHandle.style.height = '24px';
     resizeHandle.style.position = 'absolute';
     resizeHandle.style.bottom = '0';
-    resizeHandle.style.left = '0';
-    resizeHandle.style.cursor = 'nesw-resize';
+    resizeHandle.style.right = '0';
+    resizeHandle.style.cursor = 'nwse-resize';
     resizeHandle.style.backgroundColor = 'transparent';
-    resizeHandle.style.borderBottomLeftRadius = '8px';
+    resizeHandle.style.borderBottomRightRadius = '8px';
     resizeHandle.style.zIndex = '1000000';
     
-    // Agregar icono visual para el handle usando líneas diagonales (espejado para esquina izquierda)
-    resizeHandle.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" style="position: absolute; bottom: 2px; left: 2px;"><path d="M0 16 L16 16 L0 0 Z" stroke="#666" stroke-width="1.5" fill="none"/><circle cx="4" cy="12" r="1" fill="#666"/></svg>';
+    // Icono visual en la esquina inferior derecha.
+    resizeHandle.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" style="position: absolute; bottom: 2px; right: 2px;"><path d="M16 16 L16 0 L0 16 Z" stroke="#666" stroke-width="1.5" fill="none"/><circle cx="12" cy="12" r="1" fill="#666"/></svg>';
     resizeHandle.style.display = 'flex';
     resizeHandle.style.alignItems = 'center';
     resizeHandle.style.justifyContent = 'center';
@@ -86,16 +145,20 @@ function createUI() {
 
     // Eventos para redimensionamiento
     resizeHandle.addEventListener('mousedown', startResize);
-    document.addEventListener('mousemove', doResize);
-    document.addEventListener('mouseup', stopResize);
+    dragHandle.addEventListener('mousedown', startDrag);
+    bindUIEventHandlers();
 
+    container.appendChild(dragHandle);
     container.appendChild(iframe);
     container.appendChild(resizeHandle);
     document.body.appendChild(container);
+    clampContainerPosition(container);
 }
 
 function startResize(e) {
+    if (e.button !== 0) return;
     isResizing = true;
+    isDragging = false;
     const container = document.getElementById('capdata-reserva-container');
     startX = e.clientX;
     startY = e.clientY;
@@ -106,19 +169,19 @@ function startResize(e) {
 
 function doResize(e) {
     if (!isResizing) return;
+    if (typeof e.buttons === 'number' && (e.buttons & 1) === 0) {
+        stopResize();
+        return;
+    }
     
     const container = document.getElementById('capdata-reserva-container');
     if (!container) return;
 
-    // Como el handle está en la esquina inferior izquierda y el contenedor usa 'right':
-    // - El ancho: cuando arrastras hacia la izquierda (deltaX negativo), el ancho aumenta
-    // - La altura: cuando arrastras hacia abajo (deltaY positivo), la altura aumenta
+    // Handle en esquina inferior derecha.
     const deltaX = e.clientX - startX;
     const deltaY = e.clientY - startY;
     
-    // Para el ancho: si arrastras hacia la izquierda (deltaX negativo), el ancho aumenta
-    // El right se mantiene fijo, así que solo cambiamos el ancho
-    const newWidth = startWidth - deltaX; // Restamos porque arrastramos desde la izquierda
+    const newWidth = startWidth + deltaX;
     const newHeight = startHeight + deltaY; // Sumamos porque arrastramos hacia abajo
     
     // Tamaños mínimos para evitar que se haga demasiado pequeño
@@ -126,8 +189,10 @@ function doResize(e) {
     const minHeight = 300;
     // Altura máxima: altura de ventana menos márgenes (10px arriba + 10px abajo)
     const maxHeight = window.innerHeight - 20;
+    const left = parseInt(container.style.left || '10', 10);
+    const maxWidth = Math.max(minWidth, window.innerWidth - left - 10);
     
-    container.style.width = Math.max(minWidth, newWidth) + 'px';
+    container.style.width = Math.max(minWidth, Math.min(newWidth, maxWidth)) + 'px';
     container.style.height = Math.max(minHeight, Math.min(newHeight, maxHeight)) + 'px';
     container.style.maxHeight = `${maxHeight}px`; // Asegurar que respete el máximo
 }
@@ -136,12 +201,46 @@ function stopResize() {
     isResizing = false;
 }
 
+function startDrag(e) {
+    if (isResizing || e.button !== 0) return;
+    const container = document.getElementById('capdata-reserva-container');
+    if (!container) return;
+    isDragging = true;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragStartTop = parseFloat(container.style.top || '10');
+    dragStartLeft = parseFloat(container.style.left || '10');
+    e.preventDefault();
+}
+
+function doDrag(e) {
+    if (!isDragging || isResizing) return;
+    if (typeof e.buttons === 'number' && (e.buttons & 1) === 0) {
+        stopDrag();
+        return;
+    }
+    const container = document.getElementById('capdata-reserva-container');
+    if (!container) return;
+    const deltaX = e.clientX - dragStartX;
+    const deltaY = e.clientY - dragStartY;
+    container.style.left = `${dragStartLeft + deltaX}px`;
+    container.style.top = `${dragStartTop + deltaY}px`;
+    clampContainerPosition(container);
+}
+
+function stopDrag() {
+    isDragging = false;
+}
+
 function destroyUI() {
     const container = document.getElementById('capdata-reserva-container');
     if (container) {
         container.remove();
         iframe = null;
         resizeHandle = null;
+        dragHandle = null;
+        isDragging = false;
+        isResizing = false;
     }
 }
 
@@ -149,7 +248,7 @@ function toggleUI() {
     const existingContainer = document.getElementById('capdata-reserva-container');
     if (existingContainer) {
         // Si ya existe, lo quitamos
-        existingContainer.remove();
+        destroyUI();
     } else {
         // Si no existe, lo creamos
         createUI();
@@ -165,8 +264,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     
     // Si necesitas que la UI se cierre desde adentro (p.ej. al hacer clic en un botón "Cerrar")
     if (request.action === 'closeUI') {
-        const existingContainer = document.getElementById('capdata-reserva-container');
-        if (existingContainer) existingContainer.remove();
+        destroyUI();
         sendResponse({ status: 'closed' });
     }
 
@@ -382,18 +480,6 @@ async function fillForm(data, selectors) {
     console.log("------------------- FIN DEL PROCESO -------------------");
     return report;
 }
-
-// ============================================================================
-// Manual Field Mapping System - Phase 1
-// ============================================================================
-// ELIMINADO: Todo el sistema de mapeo ha sido removido para la versión de usuario final
-// ============================================================================
-// ELIMINADO: Todo el sistema de mapeo ha sido removido para la versión de usuario final
-// Las funciones generateHierarchicalSelector, extractElementValue, enterQuickSelectionMode,
-// enterSelectionMode, exitSelectionMode, handleElementHover, handleElementClick,
-// handleQuickElementClick, showFloatingMappingPopup, confirmFloatingMapping,
-// getFieldLabelForPopup y el listener de teclado Ctrl+Shift+. han sido eliminados.
-// ============================================================================
 
 } // End of guard block to prevent multiple injections
 

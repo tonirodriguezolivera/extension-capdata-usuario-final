@@ -25,7 +25,6 @@ Los archivos ofuscados se guardarán en la carpeta `obfuscated/`:
 - `obfuscated/background.js`
 - `obfuscated/contentScript.js`
 - `obfuscated/popup.js`
-- `obfuscated/mapping.js`
 
 ## Pruebas
 
@@ -33,8 +32,6 @@ Los archivos ofuscados se guardarán en la carpeta `obfuscated/`:
 2. **Carga la extensión** en Chrome (chrome://extensions)
 3. **Prueba todas las funcionalidades**:
    - Captura de reservas
-   - Mapeo manual
-   - Mapeo con IA
    - Rellenado de formularios
 
 ## Si algo falla

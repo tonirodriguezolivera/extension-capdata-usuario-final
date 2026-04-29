@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <title>Asistente de Reservas</title>
   <style>
-    /* --- ESTILOS GENERALES (SIN CAMBIOS) --- */
-    html, body { font-family: Arial, sans-serif; margin: 0; padding: 15px; padding-bottom: 60px; min-width: 400px; max-width: 100%; width: 100%; color: #333; background-color: #ffffff; overflow-x: hidden; overflow-y: auto; position: relative; box-sizing: border-box; height: auto; min-height: 100%;}
+    /* --- ESTILOS GENERALES --- */
+    html, body { font-family: Arial, sans-serif; margin: 0; padding: 15px; padding-bottom: 60px; min-width: 400px; max-width: 100%; width: 100%; color: #333; background-color: #ffffff; overflow-x: hidden; overflow-y: auto; position: relative; box-sizing: border-box; height: auto; }
     #headerBar { display: flex; justify-content: space-between; align-items: center; }
     #logoContainer { justify-content: flex-start; margin-bottom: 0; }
     #closeBtn { border: none; background: none; font-size: 24px; font-weight: bold; color: #888; cursor: pointer; padding: 0 5px; line-height: 1; }
@@ -15,7 +15,10 @@
     #apiKeyContainer label { font-weight: bold; margin-bottom: 5px; display: block; }
     #apiKeyInputRow { display: flex; gap: 8px; align-items: center; }
     #apiKeyInputRow input[type="text"] { flex: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
-    input[type="text"] { width: calc(100% - 20px); padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    input[type="text"],
+    input[type="number"],
+    input[type="date"],
+    input[type="time"] { width: calc(100% - 20px); padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
     select { width: calc(100% - 20px); padding: 8px; border: 1px solid #ccc; border-radius: 4px; background-color: #fff; font-size: 14px; cursor: pointer; appearance: none; -webkit-appearance: none; -moz-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23333' d='M6 9L1 4h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 8px center; padding-right: 30px; }
     select:hover { border-color: #0672ff; }
     select:focus { outline: none; border-color: #0672ff; box-shadow: 0 0 0 2px rgba(6, 114, 255, 0.2); }
@@ -29,11 +32,13 @@
     .status-info { background-color: #e6f7ff; color: #0056b3; }
     #statusMessage { padding: 8px; border-radius: 4px; margin-bottom: 10px; text-align: center; }
 
-    /* --- NUEVOS ESTILOS PARA PESTAÑAS --- */
+    /* --- ESTILOS PESTAÑAS --- */
     .tab-nav {
       display: flex;
       border-bottom: 1px solid #ccc;
       margin-bottom: 15px;
+      align-items: center;
+      gap: 2px;
     }
     .tab-btn {
       background: none;
@@ -44,7 +49,7 @@
       font-weight: bold;
       color: #555;
       border-bottom: 3px solid transparent;
-      margin-bottom: -1px; /* Para que el borde se alinee con la línea de abajo */
+      margin-bottom: -1px;
     }
     .tab-btn:hover {
       background-color: #f0f0f0;
@@ -55,13 +60,13 @@
       border-bottom-color: #0672ff;
     }
     .tab-pane {
-      display: none; /* Ocultamos los paneles por defecto */
+      display: none;
     }
     .tab-pane.active {
-      display: block; /* Mostramos solo el activo */
+      display: block;
     }
 
-    /* --- ESTILOS DE LA PESTAÑA DE CAPTURA (SIN CAMBIOS) --- */
+    /* --- ESTILOS PESTAÑA CAPTURA --- */
     #buttonSpinnerRow { margin-bottom: 15px; display: flex; flex-direction: column; align-items: center; }
     #capturarReserva { width: 100%; padding: 12px 0; font-size: 16px; }
     #spinnerContainer { display: none; margin-top: 10px; }
@@ -75,12 +80,18 @@
     .field-group { margin-bottom: 8px; display: flex; flex-direction: column; }
     .field-group label { font-weight: bold; font-size: 12px; margin-bottom: 2px; }
     .field-group-switch, .field-group-details { grid-column: 1 / -1; }
-    .avsis-fields-container { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #ccc; }
-    .avsis-fields-container a { display: block; text-align: right; margin-bottom: 12px; font-size: 12px; color: #0672ff; }
-    .gesintur-fields-container { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #ccc; }
-    .gesintur-fields-container a { display: block; text-align: right; margin-bottom: 12px; font-size: 12px; color: #0672ff; }
-    .pipeline-fields-container { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #ccc; }
-    .pipeline-fields-container a { display: block; text-align: right; margin-bottom: 12px; font-size: 12px; color: #0672ff; }
+    .erp-fields-block {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(0, 0, 0, 0.07);
+    }
+    .avsis-fields-container.erp-fields-block,
+    .gesintur-fields-container.erp-fields-block,
+    .pipeline-fields-container.erp-fields-block {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(0, 0, 0, 0.07);
+    }
     .required-error { border: 2px solid #dc3545 !important; background-color: #fff5f5 !important; }
     .error-message { color: #dc3545; font-size: 11px; display: block; margin-top: 4px; font-weight: normal; }
     .save-single-reservation-btn { width: 100%; margin-top: 16px; background-color: #28a745; border-color: #28a745; }
@@ -100,39 +111,60 @@
     .passenger-item { margin-bottom: 5px; font-size: 13px; }
     #globalActionsRow { margin-bottom: 15px; display: flex; justify-content: flex-end; }
     #clearBtn { background-color: #fff; border-color: #dc3545; color: #dc3545; font-weight: bold; margin-right: 3px;}
-    #clearBtn:hovder { background-color: #c82333; border-color: #c82333; color: #fff;}
-    
-    /* --- ESTILOS PESTAÑA DE LLENADO --- */
+    #clearBtn:hover { background-color: #c82333; border-color: #c82333; color: #fff;}
+
+    /* --- ESTILOS PESTAÑA CONTACTOS --- */
     #contactToolbar { margin-bottom: 10px; }
     #contactFilterActionRow { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
     #contactFilterActionRow #contactFilterInput { flex: 1; padding: 8px; border: 2px solid #ccc; border-radius: 4px; font-size: 16px; line-height: 1.5; }
     #contactFilterActionRow #fillWithContactBtn { flex: 1; font-size: 16px; background-color: #28a745; border-color: #28a745; white-space: nowrap; line-height: 1.5; }
-    #contactTableContainer { min-height: 200px; max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; }
+    #contactTableContainer { min-height: 200px; max-height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 0; }
+    #contactTableContainer.has-details { border-bottom: none; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
     .contact-row { padding: 8px 12px; border-bottom: 1px solid #eee; cursor: pointer; transition: background-color 0.2s; }
     .contact-row:last-child { border-bottom: none; }
     .contact-row:hover { background-color: #f7f7f7; }
     .contact-row.selected { background-color: #e6f7ff; border-left: 3px solid #0672ff; font-weight: bold;}
+    .contact-row.hidden { display: none; }
     .contact-row small { color: #555; font-weight: normal; }
     #contactPagination { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; }
     #contactPagination button { padding: 4px 8px; font-size: 12px; }
     #contactAction { margin-bottom: 15px; }
     #fillWithContactBtn { width: 100%; font-size: 16px; background-color: #28a745; border-color: #28a745;}
     #fillWithContactBtn:hover { background-color: #218838; border-color: #218838; }
-    .status-text { text-align: center; color: #777; padding: 20px; }
-    
-    /* --- ESTILOS PARA SELECTOR DE TIPO DE RESERVA --- */
+    .status-text { text-align: center; color: #777; padding: 10px; }
+    .hidden-element { display: none !important; }
+
+    /* --- ESTILOS PANEL DE DETALLES DEL CONTACTO --- */
+    #contactDetailsPanel { display: none !important; margin-top: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 15px; padding-left: 15px; padding-right: 15px; background: #f8f9fa; border: 2px solid #0672ff; border-top: none; border-radius: 0 0 8px 8px; }
+    #contactDetailsPanel.visible { display: block !important; }
+    #contactDetailsHeader { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 2px solid #0672ff; }
+    #contactDetailsTitle { font-size: 18px; font-weight: bold; color: #0672ff; margin: 0; }
+    #backToContactsBtn { padding: 6px 12px; font-size: 12px; background-color: #6c757d; border-color: #6c757d; color: white; }
+    #backToContactsBtn:hover { background-color: #5a6268; border-color: #5a6268; }
+    .contact-details-section { margin-bottom: 20px; }
+    .contact-details-section-title { font-size: 14px; font-weight: bold; color: #333; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #ddd; }
+    .contact-details-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    .contact-detail-item { display: flex; align-items: center; gap: 8px; padding: 8px; background: white; border-radius: 4px; border: 1px solid #e0e0e0; }
+    .contact-detail-item:hover { background: #f0f0f0; }
+    .contact-detail-icon { font-size: 16px; color: #0672ff; min-width: 20px; text-align: center; }
+    .contact-detail-label { font-weight: 600; color: #555; min-width: 120px; font-size: 12px; }
+    .contact-detail-value { flex: 1; color: #333; font-size: 13px; word-break: break-word; }
+    .contact-detail-copy { padding: 4px 8px; background: #0672ff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; transition: background 0.2s; }
+    .contact-detail-copy:hover { background: #0059cc; }
+    .contact-detail-copy:active { transform: scale(0.95); }
+    .contact-detail-empty { color: #999; font-style: italic; }
+
+    /* --- ESTILOS SELECTOR TIPO DE RESERVA --- */
     #reservationTypeContainer, #orbiswebTypeContainer {
       position: relative;
       z-index: 1;
       margin-bottom: 15px;
     }
-    
     #reservationTypeContainer label, #orbiswebTypeContainer label {
       font-weight: bold;
       display: block;
       margin-bottom: 5px;
     }
-    
     #reservationType, #orbiswebType {
       width: 100%;
       padding: 8px;
@@ -150,7 +182,7 @@
       padding-right: 30px;
     }
     .folder-row {
-        background-color: #fff8e1; /* Un color amarillento suave */
+        background-color: #fff8e1;
         color: #d35400;
         font-weight: bold;
         padding: 10px 12px;
@@ -166,33 +198,55 @@
     .folder-icon {
         font-size: 16px;
     }
-    
     #reservationType:hover, #orbiswebType:hover {
       border-color: #0672ff;
     }
-    
     #reservationType:focus, #orbiswebType:focus {
       outline: none;
       border-color: #0672ff;
       box-shadow: 0 0 0 2px rgba(6, 114, 255, 0.2);
     }
-    
     #reservationType option, #orbiswebType option {
       padding: 8px;
       background-color: #fff;
     }
-    
-    /* Estilos para botón de minimizar y restaurar */
-    #minimizeConfirmDialog:hover {
-      color: #0672ff !important;
+
+    /* --- PESTAÑA NOTAS --- */
+    #notesContent.tab-pane:not(.active) {
+      display: none !important;
     }
-    #closeConfirmDialog:hover {
-      color: #dc3545 !important;
+    #notesContent.tab-pane.active {
+      display: flex !important;
+      flex-direction: column;
+      min-height: 300px;
+    }
+    #notesTextarea {
+      flex: 1;
+      min-height: 280px;
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 14px;
+      line-height: 1.5;
+      resize: vertical;
+      background-color: #ffffff;
+      color: #333;
+      box-sizing: border-box;
+    }
+    #notesTextarea:focus {
+      outline: none;
+      border-color: #0672ff;
+      box-shadow: 0 0 0 2px rgba(6, 114, 255, 0.15);
+    }
+    #notesTextarea::placeholder {
+      color: #999;
     }
   </style>
 </head>
 <body>
-  <!-- CABECERA Y API KEY (COMÚN) -->
+  <!-- CABECERA Y API KEY -->
   <div id="headerBar">
     <div id="logoContainer"><img src="icons/Logotipo.png" alt="Logo"/></div>
     <button id="closeBtn" title="Cerrar">&times;</button>
@@ -208,24 +262,22 @@
 
   <!-- TAB NAVIGATION -->
   <div class="tab-nav">
-    <button class="tab-btn" data-tab="fillContent">Autorellenado</button>
+    <button class="tab-btn" data-tab="fillContent">Contactos</button>
     <button class="tab-btn active" data-tab="captureContent">Captura</button>
+    <button class="tab-btn" data-tab="notesContent">Notas</button>
   </div>
 
   <!-- CONTENEDOR DE PANELES -->
   <div id="tabContent">
-    
-    <!-- PESTAÑA 1: LLENADO -->
+
+    <!-- PESTAÑA 1: CONTACTOS -->
     <div id="fillContent" class="tab-pane">
-        <!-- 1. FILTRO Y BOTÓN DE RELLENAR EN LA MISMA LÍNEA -->
         <div id="contactFilterActionRow">
             <input type="text" id="contactFilterInput" placeholder="Filtrar por nombre, email...">
             <button id="fillWithContactBtn" disabled>Rellenar con Contacto Seleccionado</button>
         </div>
-        
-        <!-- 2. BARRA DE HERRAMIENTAS -->
+
         <div id="contactToolbar">
-            <!-- Barra de navegación carpetas (Oculta por defecto) -->
             <div id="folderNavBar" style="display: none; margin-bottom: 8px; align-items: center; padding-bottom: 5px; border-bottom: 1px solid #eee;">
                 <button id="backToRootBtn" style="padding: 4px 8px; font-size: 12px; margin-right: 8px; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 4px;">
                     ⬅ Atrás
@@ -234,12 +286,20 @@
             </div>
         </div>
 
-        <!-- 3. TABLA DE CONTACTOS -->
         <div id="contactTableContainer">
             <p class="status-text">Introduce tu API Key para cargar los contactos.</p>
         </div>
-        
-        <!-- 4. PAGINACIÓN -->
+
+        <div id="contactDetailsPanel">
+            <div id="contactDetailsHeader">
+                <h3 id="contactDetailsTitle">Datos del Contacto</h3>
+                <button id="backToContactsBtn">← Volver a la lista</button>
+            </div>
+            <div id="contactDetailsContent">
+                <p class="status-text">Cargando datos del contacto...</p>
+            </div>
+        </div>
+
         <div id="contactPagination">
             <button id="prevContactPageBtn" disabled>&laquo; Anterior</button>
             <span id="contactPageIndicator">Página 0 de 0</span>
@@ -257,7 +317,7 @@
         <small id="serviceTypeError" style="color: #dc3545; display: none; font-size: 11px; margin-top: 5px; font-weight: bold;">
             ⚠️ Debes seleccionar un tipo de servicio antes de capturar.
         </small>
-    </div>
+      </div>
       <div id="buttonSpinnerRow">
         <button id="capturarReserva">Capturar Datos</button>
         <div id="spinnerContainer"><div class="spinner"></div></div>
@@ -270,14 +330,19 @@
           <option value="aereo">Aéreo</option>
         </select>
       </div>
-      <div id="globalActionsRow" style="display: none; justify-content: space-between; gap: 10px;">
+      <div id="globalActionsRow" style="display: none; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
         <button id="saveAllBtn" title="Guardar todas las reservas nuevas. Esta acción consumirá 1 token." style="background-color: #28a745; border-color: #28a745; flex-grow: 2;">✅ Guardar Todo</button>
         <button id="discardBtn" title="Descartar resultados y empezar de nuevo" style="background-color: #dc3545; border-color: #dc3545; flex-grow: 1;">❌ Descartar</button>
         <button id="clearBtn" title="Limpiar la vista para una nueva captura" style="display: none;">🧹 Limpiar Captura</button>
-    </div>
+      </div>
       <div id="formContainer" style="display: none;">
         <div id="standardFieldsContainer"></div>
       </div>
+    </div>
+
+    <!-- PESTAÑA 3: NOTAS -->
+    <div id="notesContent" class="tab-pane">
+      <textarea id="notesTextarea" placeholder="Escribe aquí tus notas mientras interactúas con la web..."></textarea>
     </div>
 
   </div>
@@ -286,8 +351,7 @@
   <div id="domainNotMappedModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); z-index: 20000; align-items: center; justify-content: center;">
     <div style="background: white; border: 2px solid #dc3545; border-radius: 8px; padding: 25px; max-width: 500px; width: 90%; box-shadow: 0 4px 20px rgba(0,0,0,0.3); text-align: center;">
       <div style="margin-bottom: 20px;">
-        <div style="font-size: 48px; margin-bottom: 15px;">⚠️</div>
-        <h3 style="margin: 0 0 15px 0; color: #dc3545; font-size: 20px;">Portal Web No Operativo</h3>
+        <h3 style="margin: 0 0 15px 0; color: #dc3545; font-size: 20px;">Captura no disponible en esta web</h3>
         <p id="domainNotMappedMessage" style="margin: 0; color: #333; font-size: 14px; line-height: 1.6;">
           Este portal web no está operativo. Por favor, contacte a Capdata para solicitar la incorporación de este portal web.
         </p>
