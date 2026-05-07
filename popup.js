@@ -3034,14 +3034,7 @@ function createFieldElement(fieldName, value, index, options = {}) {
         input.type = 'text';
         input.id = fieldId;
         input.name = fieldId;
-        input.inputMode = 'numeric';
-        input.maxLength = 8;
-        input.placeholder = '8 digitos';
-        input.pattern = '\\d{8}';
-        input.value = String(value ?? '').replace(/\D/g, '').slice(0, 8);
-        input.addEventListener('input', () => {
-            input.value = input.value.replace(/\D/g, '').slice(0, 8);
-        });
+        input.value = String(value ?? '');
         group.appendChild(label);
         group.appendChild(input);
         return group;
