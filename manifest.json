@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Capturador de Reservas CapData",
-  "version": "4.3",
+  "version": "4.5",
   "description": "Extensión para capturar datos de reservas de vuelo desde la página actual y enviarlos a la API de CapData.",
   "permissions": [
     "storage",
@@ -12,8 +12,7 @@
     "windows"
   ],
   "host_permissions": [
-    "https://capdata.es/*",
-    "http://127.0.0.1:5000/*"
+    "https://capdata.es/*"
   ],
   "action": {
     "default_icon": {
