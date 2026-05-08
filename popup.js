@@ -525,6 +525,22 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Listeners del modal "Web soportada — lugar incorrecto"
+    const closeWrongUrlGuidanceBtn = document.getElementById('closeWrongUrlGuidanceModal');
+    if (closeWrongUrlGuidanceBtn) {
+        closeWrongUrlGuidanceBtn.addEventListener('click', () => {
+            hideWrongUrlGuidanceModal();
+        });
+    }
+    const wrongUrlGuidanceModal = document.getElementById('wrongUrlGuidanceModal');
+    if (wrongUrlGuidanceModal) {
+        wrongUrlGuidanceModal.addEventListener('click', (e) => {
+            if (e.target === wrongUrlGuidanceModal) {
+                hideWrongUrlGuidanceModal();
+            }
+        });
+    }
+
     // Pestaña Captura
     ui.capturarReservaBtn.addEventListener('click', () => captureReservation(ui));
     ui.clearBtn.addEventListener('click', () => clearStateAndForm(ui));
@@ -1671,25 +1687,129 @@ async function syncCurrentCaptureDomainFromActiveTab() {
 }
 
 // Función para verificar si un dominio tiene mapeos
-async function checkDomainMappings(domain, currentUrl, apiKey, reservationType) {
-    // Usar la misma URL base que background.js
-    const API_BASE_URL = 'https://capdata.es';
-    const MIN_REQUIRED_MAPPED_FIELDS = 5;
-    // const API_BASE_URL = 'https://testdev.capdata.es';
-    // const API_BASE_URL = 'https://toni-testdev.capdata.es';
-    // const API_BASE_URL = 'http://127.0.0.1:5000';
-    
-    try {
-        const typeNormal = reservationType;
-        const typeOneWay = `${reservationType}_oneway`;
+// Endpoint base centralizado (también para la guía URL)
+const POPUP_API_BASE_URL = 'https://capdata.es';
+// const POPUP_API_BASE_URL = 'https://testdev.capdata.es';
+// const POPUP_API_BASE_URL = 'https://toni-testdev.capdata.es';
+// const POPUP_API_BASE_URL = 'http://127.0.0.1:5000';
 
-        // Consultar ambos tipos de mapeos en paralelo
-        const strictUrl = encodeURIComponent(currentUrl || '');
+// Lista de service_types a sondear para detectar URLs mapeadas en el dominio.
+// Incluimos también '' para cubrir filas legacy con service_type vacío.
+function buildGuidanceServiceTypeCandidates(reservationType) {
+    const base = String(reservationType || '').split('_')[0];
+    const list = [
+        '',
+        reservationType,
+        `${reservationType}_oneway`,
+        base,
+        `${base}_oneway`,
+        'aereo',
+        'aereo_oneway',
+        'billetaje',
+        'hotel',
+        'rent_a_car',
+        'tren',
+        'tren_oneway'
+    ];
+    return [...new Set(list.map(s => String(s ?? '').trim()))];
+}
+
+// Devuelve info agregada de scopes URL del dominio (independiente de campos mapeados).
+async function fetchDomainUrlGuidance(domain, currentUrl, apiKey, reservationType) {
+    const serviceTypes = buildGuidanceServiceTypeCandidates(reservationType);
+    const aggregated = {
+        hasUrlScopes: false,
+        scopes: [],
+        guidance: null,
+        matchedScopeValue: null,
+        currentUrlIsMapped: false
+    };
+    const seenScopes = new Set();
+    try {
+        const responses = await Promise.all(serviceTypes.map(async (serviceType) => {
+            try {
+                const url = new URL(`${POPUP_API_BASE_URL}/api/field-selectors/url-guidance`);
+                url.searchParams.append('domain', domain);
+                url.searchParams.append('current_url', currentUrl || '');
+                url.searchParams.append('field_type', 'capture');
+                url.searchParams.append('service_type', serviceType);
+                const res = await fetch(url.toString(), { headers: { 'X-API-Key': apiKey } });
+                const data = await res.json();
+                if (data?.status !== 'success') return null;
+                return data;
+            } catch (_) {
+                return null;
+            }
+        }));
+        responses.filter(Boolean).forEach((data) => {
+            const info = data?.url_scope_info || {};
+            const guidance = data?.guidance || info.guidance_for_current_or_fallback || null;
+            if (info.has_url_scopes) aggregated.hasUrlScopes = true;
+            if (info.matched_meta_scope_value) {
+                aggregated.matchedScopeValue = info.matched_meta_scope_value;
+                aggregated.currentUrlIsMapped = true;
+            }
+            if (!aggregated.guidance && guidance) aggregated.guidance = guidance;
+            (Array.isArray(info.scopes) ? info.scopes : []).forEach((scope) => {
+                const value = String(scope?.scope_value || '').trim();
+                if (!value || seenScopes.has(value)) return;
+                seenScopes.add(value);
+                aggregated.scopes.push(scope);
+            });
+        });
+    } catch (e) {
+        console.warn('[POPUP] Error obteniendo guía URL del dominio:', e);
+    }
+    return aggregated;
+}
+
+function mergeGuidanceData(baseGuidance, selectorResponses) {
+    const merged = {
+        hasUrlScopes: !!baseGuidance?.hasUrlScopes,
+        scopes: Array.isArray(baseGuidance?.scopes) ? [...baseGuidance.scopes] : [],
+        guidance: baseGuidance?.guidance || null,
+        matchedScopeValue: baseGuidance?.matchedScopeValue || null,
+        currentUrlIsMapped: !!baseGuidance?.currentUrlIsMapped
+    };
+    const seen = new Set(merged.scopes.map((s) => String(s?.scope_value || '').trim()).filter(Boolean));
+    (selectorResponses || []).forEach((data) => {
+        const info = data?.url_scope_info || {};
+        if (info.has_url_scopes) merged.hasUrlScopes = true;
+        if (String(data?.matched_scope || '').toLowerCase() === 'url') {
+            merged.currentUrlIsMapped = true;
+        }
+        const matchedValue = String(data?.matched_scope_value || info?.matched_meta_scope_value || '').trim();
+        if (!merged.matchedScopeValue && matchedValue) {
+            merged.matchedScopeValue = matchedValue;
+        }
+        if (!merged.guidance) {
+            merged.guidance = data?.matched_scope_guidance || info?.guidance_for_current_or_fallback || null;
+        }
+        (Array.isArray(info.scopes) ? info.scopes : []).forEach((scope) => {
+            const value = String(scope?.scope_value || '').trim();
+            if (!value || seen.has(value)) return;
+            seen.add(value);
+            merged.scopes.push(scope);
+        });
+    });
+    return merged;
+}
+
+async function checkDomainMappings(domain, currentUrl, apiKey, reservationType) {
+    const API_BASE_URL = POPUP_API_BASE_URL;
+    const MIN_REQUIRED_MAPPED_FIELDS = 5;
+
+    const typeNormal = reservationType;
+    const typeOneWay = `${reservationType}_oneway`;
+    const strictUrl = encodeURIComponent(currentUrl || '');
+    const guidancePromise = fetchDomainUrlGuidance(domain, currentUrl, apiKey, reservationType);
+
+    try {
         const [resNormal, resOneWay] = await Promise.all([
-            fetch(`${API_BASE_URL}/api/field-selectors?domain=${encodeURIComponent(domain)}&scope_type=url&scope_value=${strictUrl}&current_url=${strictUrl}&strict_scope=1&field_type=capture&service_type=${encodeURIComponent(typeNormal)}`, { 
+            fetch(`${API_BASE_URL}/api/field-selectors?domain=${encodeURIComponent(domain)}&scope_type=url&current_url=${strictUrl}&strict_scope=1&field_type=capture&service_type=${encodeURIComponent(typeNormal)}`, { 
                 headers: { "X-API-Key": apiKey }
             }),
-            fetch(`${API_BASE_URL}/api/field-selectors?domain=${encodeURIComponent(domain)}&scope_type=url&scope_value=${strictUrl}&current_url=${strictUrl}&strict_scope=1&field_type=capture&service_type=${encodeURIComponent(typeOneWay)}`, { 
+            fetch(`${API_BASE_URL}/api/field-selectors?domain=${encodeURIComponent(domain)}&scope_type=url&current_url=${strictUrl}&strict_scope=1&field_type=capture&service_type=${encodeURIComponent(typeOneWay)}`, { 
                 headers: { "X-API-Key": apiKey }
             })
         ]);
@@ -1707,8 +1827,6 @@ async function checkDomainMappings(domain, currentUrl, apiKey, reservationType) 
             mappingsOneWay = dataOneWay.mappings;
         }
 
-        // Solo consideramos "mapeada" una URL si hay selectores reales y alguno existe en el DOM actual.
-        // Esto evita que campos fijos/static (sin selector_path) o mapeos no aplicables habiliten captura.
         const isFixedLikeMapping = (mapping) => {
             if (!mapping || typeof mapping === 'string') return false;
             if (mapping.is_fixed === true || mapping.fixed === true) return true;
@@ -1741,18 +1859,20 @@ async function checkDomainMappings(domain, currentUrl, apiKey, reservationType) 
         }).filter(Boolean);
         const eligibleMappings = [...extractEligibleMappings(mappingsNormal), ...extractEligibleMappings(mappingsOneWay)];
         const mappedFieldNames = new Set(eligibleMappings.map((m) => m.fieldName));
+        const urlGuidanceFromEndpoint = await guidancePromise;
+        const urlGuidance = mergeGuidanceData(urlGuidanceFromEndpoint, [dataNormal, dataOneWay]);
         if (mappedFieldNames.size < MIN_REQUIRED_MAPPED_FIELDS) {
-            return { hasMappings: false, error: null };
+            return { hasMappings: false, error: null, urlGuidance };
         }
         const selectors = [...new Set(eligibleMappings.map((m) => m.selector))];
         if (selectors.length === 0) {
-            return { hasMappings: false, error: null };
+            return { hasMappings: false, error: null, urlGuidance };
         }
 
         const tabs = await new Promise((resolve) => chrome.tabs.query({ active: true, currentWindow: true }, resolve));
         const activeTabId = tabs?.[0]?.id;
         if (!activeTabId) {
-            return { hasMappings: false, error: 'No se pudo obtener la pestaña activa para validar selectores.' };
+            return { hasMappings: false, error: 'No se pudo obtener la pestaña activa para validar selectores.', urlGuidance };
         }
         const injection = await chrome.scripting.executeScript({
             target: { tabId: activeTabId, frameIds: [0] },
@@ -1770,16 +1890,24 @@ async function checkDomainMappings(domain, currentUrl, apiKey, reservationType) 
         });
         const hasAnySelectorInDom = !!injection?.[0]?.result;
         const hasMappings = hasAnySelectorInDom;
-        
-        return { hasMappings, error: null };
+
+        return { hasMappings, error: null, urlGuidance };
     } catch (error) {
         console.error('Error verificando mapeos del dominio:', error);
-        // Fail closed: si no podemos verificar mapeo estricto por URL, no iniciamos captura.
-        return { hasMappings: false, error: error.message };
+        const urlGuidance = await guidancePromise.catch(() => null);
+        return { hasMappings: false, error: error.message, urlGuidance };
     }
 }
 
-// Función para mostrar el modal de dominio no mapeado
+// Decide si toca mostrar el aviso "lugar incorrecto" en lugar del genérico.
+function shouldShowWrongUrlGuidance(urlGuidance) {
+    if (!urlGuidance) return false;
+    const hasScopes = !!urlGuidance.hasUrlScopes || (Array.isArray(urlGuidance.scopes) && urlGuidance.scopes.length > 0);
+    if (!hasScopes) return false;
+    if (urlGuidance.currentUrlIsMapped) return false;
+    return true;
+}
+
 function showDomainNotMappedModal(domain) {
     const modal = document.getElementById('domainNotMappedModal');
     if (modal) {
@@ -1787,9 +1915,66 @@ function showDomainNotMappedModal(domain) {
     }
 }
 
-// Función para ocultar el modal de dominio no mapeado
 function hideDomainNotMappedModal() {
     const modal = document.getElementById('domainNotMappedModal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+function showWrongUrlGuidanceModal(urlGuidance) {
+    const modal = document.getElementById('wrongUrlGuidanceModal');
+    if (!modal) return;
+
+    const messageEl = document.getElementById('wrongUrlGuidanceMessage');
+    const scopesWrap = document.getElementById('wrongUrlGuidanceScopesWrap');
+    const scopesEl = document.getElementById('wrongUrlGuidanceScopes');
+    const imgEl = document.getElementById('wrongUrlGuidanceImage');
+
+    const guidance = urlGuidance?.guidance || null;
+    const customText = (guidance?.instruction_text || '').trim();
+    const defaultMsg = 'Esta web está soportada para captura, pero estás en un lugar incorrecto. Realiza la captura desde una de las URLs mapeadas:';
+
+    if (messageEl) {
+        messageEl.textContent = customText || defaultMsg;
+    }
+
+    const scopeValues = Array.isArray(urlGuidance?.scopes)
+        ? urlGuidance.scopes.map(s => String(s?.scope_value || '').trim()).filter(Boolean)
+        : [];
+    if (scopesEl) scopesEl.innerHTML = '';
+    if (scopeValues.length > 0 && scopesEl && scopesWrap) {
+        scopeValues.slice(0, 5).forEach((value) => {
+            const li = document.createElement('li');
+            li.textContent = value;
+            scopesEl.appendChild(li);
+        });
+        scopesWrap.style.display = 'block';
+    } else if (scopesWrap) {
+        scopesWrap.style.display = customText ? 'none' : 'block';
+        if (!customText && scopesEl) {
+            const li = document.createElement('li');
+            li.textContent = 'Una URL mapeada de este dominio.';
+            scopesEl.appendChild(li);
+        }
+    }
+
+    if (imgEl) {
+        const imageUrl = (guidance?.instruction_image_url || '').trim();
+        if (imageUrl) {
+            imgEl.src = imageUrl;
+            imgEl.style.display = 'block';
+        } else {
+            imgEl.removeAttribute('src');
+            imgEl.style.display = 'none';
+        }
+    }
+
+    modal.style.display = 'flex';
+}
+
+function hideWrongUrlGuidanceModal() {
+    const modal = document.getElementById('wrongUrlGuidanceModal');
     if (modal) {
         modal.style.display = 'none';
     }
@@ -1840,8 +2025,13 @@ async function captureReservation(ui) {
         const mappingCheck = await checkDomainMappings(domain, tabUrl.href, apiKey, reservationType);
 
         if (!mappingCheck.hasMappings) {
-            // No hay mapeos, mostrar el disclaimer
-            showDomainNotMappedModal(domain);
+            // Si el dominio tiene URLs mapeadas pero la actual no coincide,
+            // mostramos el aviso configurado por el usuario mapeador.
+            if (shouldShowWrongUrlGuidance(mappingCheck.urlGuidance)) {
+                showWrongUrlGuidanceModal(mappingCheck.urlGuidance);
+            } else {
+                showDomainNotMappedModal(domain);
+            }
             showStatus(ui, '', 'info'); // Limpiar mensaje de estado
             return; // No continuar con la captura
         }

@@ -365,6 +365,26 @@
     </div>
   </div>
 
+  <!-- Modal de aviso cuando el dominio SÍ tiene URLs mapeadas pero la URL actual no coincide -->
+  <div id="wrongUrlGuidanceModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); z-index: 20001; align-items: center; justify-content: center;">
+    <div style="background: white; border: 2px solid #f0ad4e; border-radius: 8px; padding: 25px; max-width: 560px; width: 92%; box-shadow: 0 4px 20px rgba(0,0,0,0.3); text-align: left; max-height: 90vh; overflow-y: auto;">
+      <h3 style="margin: 0 0 12px 0; color: #d58512; font-size: 20px; text-align: center;">Web soportada — lugar incorrecto</h3>
+      <p id="wrongUrlGuidanceMessage" style="margin: 0; color: #333; font-size: 14px; line-height: 1.6; white-space: pre-wrap;"></p>
+      <div id="wrongUrlGuidanceScopesWrap" style="margin: 12px 0 0 0; display:none;">
+        <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Realiza la captura desde:</div>
+        <ul id="wrongUrlGuidanceScopes" style="margin: 0; padding-left: 18px; color: #0672ff; font-size: 13px; word-break: break-all;"></ul>
+      </div>
+      <div style="text-align: center;">
+        <img id="wrongUrlGuidanceImage" src="" alt="Guía visual" style="display:none; max-width:100%; max-height:280px; margin: 14px auto 0; border-radius:6px; border:1px solid #ddd;" />
+      </div>
+      <div style="text-align: center; margin-top: 18px;">
+        <button id="closeWrongUrlGuidanceModal" style="background-color: #f0ad4e; border: none; color: white; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 14px;">
+          Entendido
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>

@@ -1016,10 +1016,83 @@ async function startFullCaptureProcess(apiKey, tabId, reservationType) {
         // Regla: No poner fecha de emisión automática si es GIAV o Gesintur
         const shouldLeaveIssueDateEmpty = isGiavFlow || includeGesintur;
 
+        const buildWrongUrlCaptureError = (guidanceInfo, defaultMessage) => {
+            if (!guidanceInfo?.has_url_scopes) return null;
+            const guidance = guidanceInfo.guidance;
+            const scopeList = Array.isArray(guidanceInfo.scopes) ? guidanceInfo.scopes.map(s => s.scope_value).filter(Boolean) : [];
+            const text = (guidance?.instruction_text || '').trim();
+            const message = text || `${defaultMessage}\nRealiza la captura desde:\n${scopeList.slice(0, 3).join('\n') || 'una URL mapeada en este dominio.'}`;
+            const err = new Error(message);
+            if (guidance?.instruction_image_url) {
+                err.guidanceImageUrl = guidance.instruction_image_url;
+            }
+            return err;
+        };
+
+        const summarizeUrlScopeInfo = (apiData) => {
+            const info = apiData?.url_scope_info || {};
+            const hasUrlScopes = !!info.has_url_scopes;
+            const scopes = Array.isArray(info.scopes) ? info.scopes : [];
+            const guidance = info.guidance_for_current_or_fallback || apiData?.matched_scope_guidance || null;
+            const isUrlMismatch = hasUrlScopes && String(apiData?.matched_scope || '').toLowerCase() !== 'url';
+            return { has_url_scopes: hasUrlScopes, scopes, guidance, is_url_mismatch: isUrlMismatch };
+        };
+        const mergeUrlScopeInfos = (primary, secondary) => {
+            const p = primary || {};
+            const s = secondary || {};
+            const combinedScopes = [...(Array.isArray(p.scopes) ? p.scopes : []), ...(Array.isArray(s.scopes) ? s.scopes : [])];
+            const uniqueScopeValues = new Set();
+            const dedupScopes = [];
+            combinedScopes.forEach((item) => {
+                const scopeValue = String(item?.scope_value || '').trim();
+                if (!scopeValue || uniqueScopeValues.has(scopeValue)) return;
+                uniqueScopeValues.add(scopeValue);
+                dedupScopes.push(item);
+            });
+            return {
+                has_url_scopes: !!(p.has_url_scopes || s.has_url_scopes || dedupScopes.length > 0),
+                scopes: dedupScopes,
+                guidance: p.guidance || s.guidance || null,
+                is_url_mismatch: !!(p.is_url_mismatch || s.is_url_mismatch)
+            };
+        };
+        const fetchDomainLevelGuidanceInfo = async (serviceTypes) => {
+            const candidates = [...new Set((serviceTypes || []).map(s => String(s ?? '').trim()))];
+            if (candidates.length === 0) return { has_url_scopes: false, scopes: [], guidance: null, is_url_mismatch: false };
+            try {
+                const responses = await Promise.all(candidates.map(async (serviceType) => {
+                    try {
+                        const url = new URL(`${API_BASE_URL}/api/field-selectors/url-guidance`);
+                        url.searchParams.append('domain', domain);
+                        url.searchParams.append('current_url', currentUrl);
+                        url.searchParams.append('field_type', 'capture');
+                        url.searchParams.append('service_type', serviceType);
+                        const res = await fetch(url.toString(), { headers: { "X-API-Key": apiKey } });
+                        const data = await res.json();
+                        if (data?.status !== 'success') return null;
+                        const info = data?.url_scope_info || {};
+                        return {
+                            has_url_scopes: !!info.has_url_scopes,
+                            scopes: Array.isArray(info.scopes) ? info.scopes : [],
+                            guidance: data?.guidance || info.guidance_for_current_or_fallback || null,
+                            is_url_mismatch: false
+                        };
+                    } catch (_) {
+                        return null;
+                    }
+                }));
+                return responses.filter(Boolean).reduce((acc, curr) => mergeUrlScopeInfos(acc, curr), { has_url_scopes: false, scopes: [], guidance: null, is_url_mismatch: false });
+            } catch (_) {
+                return { has_url_scopes: false, scopes: [], guidance: null, is_url_mismatch: false };
+            }
+        };
+
         // 3. BÚSQUEDA DE MAPEADOS ESTÁNDAR (Normal y OneWay)
         let mappingsNormal = {};
         let mappingsOneWay = {};
         let customSchema = [];
+        let urlScopeInfoNormal = { has_url_scopes: false, scopes: [], guidance: null, is_url_mismatch: false };
+        let urlScopeInfoOneWay = { has_url_scopes: false, scopes: [], guidance: null, is_url_mismatch: false };
 
         try {
             const typeNormal = reservationType;
@@ -1036,8 +1109,14 @@ async function startFullCaptureProcess(apiKey, tabId, reservationType) {
             const dataN = await resNormal.json();
             const dataO = await resOneWay.json();
 
-            if (dataN.status === 'success') mappingsNormal = dataN.mappings || {};
-            if (dataO.status === 'success') mappingsOneWay = dataO.mappings || {};
+            if (dataN.status === 'success') {
+                mappingsNormal = dataN.mappings || {};
+                urlScopeInfoNormal = summarizeUrlScopeInfo(dataN);
+            }
+            if (dataO.status === 'success') {
+                mappingsOneWay = dataO.mappings || {};
+                urlScopeInfoOneWay = summarizeUrlScopeInfo(dataO);
+            }
 
         } catch (error) {
             console.warn('[BACKGROUND] Error obteniendo mapeos estándar:', error);
@@ -1076,7 +1155,41 @@ async function startFullCaptureProcess(apiKey, tabId, reservationType) {
         }).filter(Boolean);
         const eligibleMappings = [...extractEligibleMappings(mappingsNormal), ...extractEligibleMappings(mappingsOneWay)];
         const mappedFieldNames = new Set(eligibleMappings.map((m) => m.fieldName));
+        const combinedUrlScopeInfo = {
+            has_url_scopes: !!(urlScopeInfoNormal.has_url_scopes || urlScopeInfoOneWay.has_url_scopes),
+            scopes: [...(urlScopeInfoNormal.scopes || []), ...(urlScopeInfoOneWay.scopes || [])],
+            guidance: urlScopeInfoNormal.guidance || urlScopeInfoOneWay.guidance || null,
+            is_url_mismatch: !!(urlScopeInfoNormal.is_url_mismatch || urlScopeInfoOneWay.is_url_mismatch)
+        };
+        const baseReservationTypeForLookup = String(reservationType || '').split('_')[0];
+        const domainLevelGuidanceInfo = await fetchDomainLevelGuidanceInfo([
+            '',
+            reservationType,
+            `${reservationType}_oneway`,
+            baseReservationTypeForLookup,
+            `${baseReservationTypeForLookup}_oneway`,
+            'aereo',
+            'aereo_oneway',
+            'billetaje',
+            'hotel',
+            'rent_a_car',
+            'tren',
+            'tren_oneway'
+        ]);
+        const effectiveUrlScopeInfo = mergeUrlScopeInfos(combinedUrlScopeInfo, domainLevelGuidanceInfo);
+        if (effectiveUrlScopeInfo.is_url_mismatch) {
+            const guidedError = buildWrongUrlCaptureError(
+                effectiveUrlScopeInfo,
+                'Web soportada para captura, pero estás en un lugar incorrecto.'
+            );
+            if (guidedError) throw guidedError;
+        }
         if (mappedFieldNames.size < MIN_REQUIRED_MAPPED_FIELDS) {
+            const guidedError = buildWrongUrlCaptureError(
+                effectiveUrlScopeInfo,
+                'Web soportada para captura, pero estás en un lugar incorrecto.'
+            );
+            if (guidedError) throw guidedError;
             throw new Error(`Esta URL no tiene suficientes campos mapeados (${mappedFieldNames.size}/${MIN_REQUIRED_MAPPED_FIELDS}). Mapea al menos ${MIN_REQUIRED_MAPPED_FIELDS} campos para capturar.`);
         }
         const selectorsToValidate = [...new Set(eligibleMappings.map((m) => m.selector))];
@@ -1096,6 +1209,11 @@ async function startFullCaptureProcess(apiKey, tabId, reservationType) {
         });
         const hasAnyMappedSelectorInDom = !!selectorPresenceCheck?.[0]?.result;
         if (!hasAnyMappedSelectorInDom) {
+            const guidedError = buildWrongUrlCaptureError(
+                effectiveUrlScopeInfo,
+                'Web soportada para captura, pero estás en un lugar incorrecto.'
+            );
+            if (guidedError) throw guidedError;
             throw new Error("La URL actual no tiene mapeos aplicables. Revisa el mapeo específico para esta URL.");
         }
 
@@ -1191,11 +1309,13 @@ async function startFullCaptureProcess(apiKey, tabId, reservationType) {
 
     } catch (error) {
         console.error("[BACKGROUND] Error en startFullCaptureProcess:", error);
+        const hasGuidanceImage = !!(error && typeof error.guidanceImageUrl === 'string' && error.guidanceImageUrl.trim());
         chrome.notifications.create({
-            type: 'basic',
+            type: hasGuidanceImage ? 'image' : 'basic',
             iconUrl: 'icons/icon128.png',
             title: 'Error de Captura',
-            message: error.message || "Ocurrió un error inesperado."
+            message: error.message || "Ocurrió un error inesperado.",
+            imageUrl: hasGuidanceImage ? error.guidanceImageUrl.trim() : undefined
         });
     }
 }
