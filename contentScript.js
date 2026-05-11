@@ -91,8 +91,87 @@ function createUI() {
     dragHandle.style.fontFamily = 'Arial, sans-serif';
     dragHandle.style.fontSize = '12px';
     dragHandle.style.color = '#555';
-    dragHandle.innerHTML = '<span style="font-weight:600;">Asistente CapData</span><span style="opacity:.7;">Arrastrar</span>';
     dragHandle.title = 'Arrastra para mover';
+
+    const infoBtn = document.createElement('button');
+    infoBtn.type = 'button';
+    infoBtn.textContent = 'i';
+    infoBtn.title = 'Webs validadas';
+    infoBtn.style.cssText = 'width:18px;height:18px;border-radius:50%;border:1px solid #22a06b;background:#e8f7ef;color:#167a4d;font-weight:700;font-size:12px;line-height:16px;cursor:pointer;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;';
+
+    const dragLabel = document.createElement('span');
+    dragLabel.textContent = 'Arrastrar';
+    dragLabel.style.cssText = 'font-weight:600;opacity:.8;flex:1;text-align:center;padding:0 8px;';
+
+    const closeHandleBtn = document.createElement('button');
+    closeHandleBtn.type = 'button';
+    closeHandleBtn.textContent = '×';
+    closeHandleBtn.title = 'Cerrar';
+    closeHandleBtn.style.cssText = 'border:none;background:transparent;color:#666;font-size:18px;line-height:1;cursor:pointer;padding:0 2px;flex:0 0 auto;border-radius:4px;transition:background-color .15s ease,color .15s ease;';
+
+    dragHandle.appendChild(infoBtn);
+    dragHandle.appendChild(dragLabel);
+    dragHandle.appendChild(closeHandleBtn);
+
+    const stopHandleButtonEvent = (event) => {
+        event.stopPropagation();
+    };
+    infoBtn.addEventListener('mousedown', stopHandleButtonEvent);
+    closeHandleBtn.addEventListener('mousedown', stopHandleButtonEvent);
+
+    closeHandleBtn.addEventListener('mouseenter', () => {
+        closeHandleBtn.style.color = '#222';
+        closeHandleBtn.style.backgroundColor = '#e9ecef';
+    });
+    closeHandleBtn.addEventListener('mouseleave', () => {
+        closeHandleBtn.style.color = '#666';
+        closeHandleBtn.style.backgroundColor = 'transparent';
+    });
+
+    infoBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const existingPopup = document.getElementById('capdata-supported-domains-popup');
+        if (existingPopup) {
+            existingPopup.remove();
+            return;
+        }
+
+        const popup = document.createElement('div');
+        popup.id = 'capdata-supported-domains-popup';
+        popup.style.cssText = 'position:absolute;top:34px;left:10px;right:10px;background:#e8f7ef;color:#167a4d;border:1px solid #b6e5ca;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.35;box-shadow:0 2px 8px rgba(0,0,0,0.1);z-index:1000001;';
+
+        const popupHeader = document.createElement('div');
+        popupHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;';
+
+        const popupTitle = document.createElement('strong');
+        popupTitle.textContent = 'Webs validadas';
+        popupTitle.style.cssText = 'font-size:12px;';
+
+        const popupCloseBtn = document.createElement('button');
+        popupCloseBtn.type = 'button';
+        popupCloseBtn.textContent = '×';
+        popupCloseBtn.title = 'Cerrar aviso';
+        popupCloseBtn.style.cssText = 'border:none;background:transparent;color:#167a4d;font-size:16px;line-height:1;cursor:pointer;padding:0 2px;';
+        popupCloseBtn.addEventListener('mousedown', stopHandleButtonEvent);
+        popupCloseBtn.addEventListener('click', (closeEvent) => {
+            closeEvent.stopPropagation();
+            popup.remove();
+        });
+
+        const popupBody = document.createElement('div');
+        popupBody.textContent = 'Webs validadas actualmente: Ryanair y Vueling.';
+
+        popupHeader.appendChild(popupTitle);
+        popupHeader.appendChild(popupCloseBtn);
+        popup.appendChild(popupHeader);
+        popup.appendChild(popupBody);
+        container.appendChild(popup);
+    });
+
+    closeHandleBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        destroyUI();
+    });
 
     iframe = document.createElement('iframe');
     iframe.id = IFRAME_ID;
@@ -203,6 +282,7 @@ function stopResize() {
 
 function startDrag(e) {
     if (isResizing || e.button !== 0) return;
+    if (e.target && e.target.closest('button')) return;
     const container = document.getElementById('capdata-reserva-container');
     if (!container) return;
     isDragging = true;

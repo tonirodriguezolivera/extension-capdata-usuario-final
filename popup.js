@@ -450,16 +450,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    document.getElementById('closeBtn')?.addEventListener('click', () => {
-        if (chrome.tabs && chrome.tabs.query) {
-            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                if (tabs && tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { action: 'closeUI' });
-            });
-        } else {
-            console.warn('chrome.tabs API no disponible');
-        }
-    });
-
     chrome.storage.onChanged.addListener((changes, namespace) => {
         if (namespace === 'local' && changes[CAPTURE_HIDE_EMPTY_RULES_KEY]) {
             const nextValue = changes[CAPTURE_HIDE_EMPTY_RULES_KEY]?.newValue;
