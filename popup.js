@@ -2021,7 +2021,7 @@ async function captureReservation(ui) {
         currentCaptureDomain = normalizeCaptureScopeDomain(domain);
 
         // Verificar si el dominio tiene mapeos
-        showStatus(ui, 'Verificando mapeos del dominio...', 'info');
+        showStatus(ui, 'Comprobando validación del dominio...', 'info');
         const mappingCheck = await checkDomainMappings(domain, tabUrl.href, apiKey, reservationType);
 
         if (!mappingCheck.hasMappings) {
