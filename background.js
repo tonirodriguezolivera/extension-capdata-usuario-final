@@ -530,12 +530,22 @@ async function extractDataUsingMappings(tabId, mappingsNormal, mappingsOneWay, d
                                     }
                                 }
 
-                                results.extracted_fields[fieldName] = Array.from(elements).map((el, passengerIndex) => {
-                                    let nameText = (el.textContent?.trim() || el.innerText?.trim() || '').replace(/\s+/g, ' ');
-                                    const passengerNoiseRegex = /\s*(?:Nº|Número|Iberia Plus|Frequent Flyer|Loyalty|Socio|Asiento|Seat|Avios).*/i;
-                                    nameText = nameText.replace(passengerNoiseRegex, '').trim();
-                                    nameText = nameText.replace(/\s+/g, ' ');
+                                const passengerNoiseRegex = /\s*(?:Nº|Número|Iberia Plus|Frequent Flyer|Loyalty|Socio|Asiento|Seat|Avios).*/i;
+                                const normalizePassengerName = (rawValue) => {
+                                    let normalized = String(rawValue || '').replace(/\s+/g, ' ').trim();
+                                    normalized = normalized.replace(passengerNoiseRegex, '').trim();
+                                    return normalized.replace(/\s+/g, ' ').trim();
+                                };
+                                const validPassengerEntries = Array.from(elements)
+                                    .map((el) => ({
+                                        element: el,
+                                        nameText: normalizePassengerName(el.textContent || el.innerText || '')
+                                    }))
+                                    .filter((entry) => entry.nameText.length > 0);
 
+                                results.extracted_fields[fieldName] = validPassengerEntries.map((entry, passengerIndex) => {
+                                    const el = entry.element;
+                                    const nameText = entry.nameText;
                                     let ticketValue = '';
                                     const passengerScope = el.closest('tbody') || el.closest('tr, .table-passengerDetail, .contentSection') || el.parentElement;
                                     if (passengerScope && ticketSelectorRaw) {
