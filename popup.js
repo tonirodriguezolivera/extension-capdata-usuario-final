@@ -1511,12 +1511,6 @@ async function initializeCaptureTab(ui) {
 
             await loadIntegrationVisibility(userApiKey);
             await loadIntegrationFieldVisibility(userApiKey);
-            const avsisResultEffective = applyIntegrationStatusFallbackFromVisibility(avsisResult, 'avsis', '✅ Integración AVSIS ACTIVA.');
-            const gesinturResultEffective = applyIntegrationStatusFallbackFromVisibility(gesinturResult, 'gesintur', '✅ Integración Gesintur ACTIVA.');
-            const orbiswebResultEffective = applyIntegrationStatusFallbackFromVisibility(orbiswebResult, 'orbisweb', '✅ Integración Pipeline/ORBISWEB ACTIVA.');
-            cachedAvsisStatus = avsisResultEffective.active;
-            cachedGesinturStatus = gesinturResultEffective.active;
-            cachedOrbiswebStatus = orbiswebResultEffective.active;
             
             // Actualizar visibilidad de desplegables según integraciones activas
             updateServiceTypeVisibility();
@@ -1529,11 +1523,11 @@ async function initializeCaptureTab(ui) {
             
             // Preparar mensajes de estado
             const messages = ['Mostrando última reserva capturada.'];
-            const hasActiveIntegrations = avsisResultEffective.active || gesinturResultEffective.active || orbiswebResultEffective.active;
+            const hasActiveIntegrations = avsisResult.active || gesinturResult.active || orbiswebResult.active;
             
-            if (avsisResultEffective.message) messages.push(avsisResultEffective.message);
-            if (gesinturResultEffective.message) messages.push(gesinturResultEffective.message);
-            if (orbiswebResultEffective.message) messages.push(orbiswebResultEffective.message);
+            if (avsisResult.message) messages.push(avsisResult.message);
+            if (gesinturResult.message) messages.push(gesinturResult.message);
+            if (orbiswebResult.message) messages.push(orbiswebResult.message);
             
             showStatus(ui, messages.join(' '), hasActiveIntegrations ? 'success' : 'info');
         } else {
@@ -1560,12 +1554,6 @@ async function initializeCaptureTab(ui) {
 
             await loadIntegrationVisibility(userApiKey);
             await loadIntegrationFieldVisibility(userApiKey);
-            const avsisResultEffective = applyIntegrationStatusFallbackFromVisibility(avsisResult, 'avsis', '✅ Integración AVSIS ACTIVA.');
-            const gesinturResultEffective = applyIntegrationStatusFallbackFromVisibility(gesinturResult, 'gesintur', '✅ Integración Gesintur ACTIVA.');
-            const orbiswebResultEffective = applyIntegrationStatusFallbackFromVisibility(orbiswebResult, 'orbisweb', '✅ Integración Pipeline/ORBISWEB ACTIVA.');
-            cachedAvsisStatus = avsisResultEffective.active;
-            cachedGesinturStatus = gesinturResultEffective.active;
-            cachedOrbiswebStatus = orbiswebResultEffective.active;
             
             // Actualizar visibilidad de desplegables según integraciones activas
             updateServiceTypeVisibility();
@@ -1576,9 +1564,9 @@ async function initializeCaptureTab(ui) {
             }
             
             const messages = [];
-            if (avsisResultEffective.message) messages.push(avsisResultEffective.message);
-            if (gesinturResultEffective.message) messages.push(gesinturResultEffective.message);
-            if (orbiswebResultEffective.message) messages.push(orbiswebResultEffective.message);
+            if (avsisResult.message) messages.push(avsisResult.message);
+            if (gesinturResult.message) messages.push(gesinturResult.message);
+            if (orbiswebResult.message) messages.push(orbiswebResult.message);
             
             if (messages.length > 0) {
                 showStatus(ui, messages.join(' '), 'success');
@@ -1596,9 +1584,10 @@ async function checkAvsisStatus(apiKey) {
     try {
         const response = await chrome.runtime.sendMessage({ action: 'checkAvsisIntegration', apiKey });
         if (chrome.runtime.lastError) throw new Error(chrome.runtime.lastError.message);
-        
-        if (response.status === 'success' && response.integrations) {
-            const isActive = response.integrations.some(int => int.slug === 'avsis' && int.active);
+
+        const integrations = extractIntegrationsFromResponse(response);
+        if (integrations) {
+            const isActive = hasActiveIntegration(integrations, ['avsis']);
             const message = isActive ? '✅ Integración AVSIS ACTIVA.' : '';
             return { active: isActive, message: message };
         }
@@ -1612,9 +1601,10 @@ async function checkGesinturStatus(apiKey) {
     try {
         const response = await chrome.runtime.sendMessage({ action: 'checkGesinturIntegration', apiKey });
         if (chrome.runtime.lastError) throw new Error(chrome.runtime.lastError.message);
-        
-        if (response.status === 'success' && response.integrations) {
-            const isActive = response.integrations.some(int => int.slug === 'gesintur' && int.active);
+
+        const integrations = extractIntegrationsFromResponse(response);
+        if (integrations) {
+            const isActive = hasActiveIntegration(integrations, ['gesintur']);
             const message = isActive ? '✅ Integración Gesintur ACTIVA.' : '';
             return { active: isActive, message: message };
         }
@@ -1628,19 +1618,10 @@ async function checkOrbiswebStatus(apiKey) {
     try {
         const response = await chrome.runtime.sendMessage({ action: 'checkOrbiswebIntegration', apiKey });
         if (chrome.runtime.lastError) throw new Error(chrome.runtime.lastError.message);
-        
-        if (response.status === 'success' && response.integrations) {
-            // Debug: mostrar todas las integraciones para verificar el slug exacto
-            // console.log("🔍 Integraciones recibidas:", response.integrations);
-            const orbiswebIntegration = response.integrations.find(int => 
-                int.slug && (int.slug.toLowerCase() === 'orbisweb' || 
-                            int.slug.toLowerCase() === 'orbis_web' || 
-                            int.slug.toLowerCase() === 'orbis-web' ||
-                            int.slug.toLowerCase().includes('orbis'))
-            );
-            // console.log("🔍 Integración ORBISWEB encontrada:", orbiswebIntegration);
-            
-            const isActive = orbiswebIntegration ? orbiswebIntegration.active : false;
+
+        const integrations = extractIntegrationsFromResponse(response);
+        if (integrations) {
+            const isActive = hasActiveIntegration(integrations, ['orbisweb', 'orbis_web', 'orbis-web']);
             const message = isActive ? '✅ Integración Pipeline/ORBISWEB ACTIVA.' : '';
             return { active: isActive, message: message };
         }
@@ -1650,13 +1631,24 @@ async function checkOrbiswebStatus(apiKey) {
     }
 }
 
-function applyIntegrationStatusFallbackFromVisibility(result, slug, activeMessage) {
-    const current = result && typeof result === 'object' ? result : { active: false, message: '' };
-    if (current.active) return current;
-    if (cachedIntegrationVisibility && cachedIntegrationVisibility[slug] === true) {
-        return { active: true, message: activeMessage };
-    }
-    return current;
+function extractIntegrationsFromResponse(response) {
+    if (!response || typeof response !== 'object') return null;
+    if (Array.isArray(response.integrations)) return response.integrations;
+    if (Array.isArray(response.data?.integrations)) return response.data.integrations;
+    if (Array.isArray(response.result?.integrations)) return response.result.integrations;
+    return null;
+}
+
+function hasActiveIntegration(integrations, acceptedSlugs) {
+    if (!Array.isArray(integrations) || !Array.isArray(acceptedSlugs)) return false;
+    const normalizedAccepted = acceptedSlugs.map(s => String(s || '').toLowerCase());
+    return integrations.some((integration) => {
+        if (!integration || typeof integration !== 'object') return false;
+        const slug = String(integration.slug || '').toLowerCase();
+        const isAccepted = normalizedAccepted.some(candidate => slug === candidate || slug.includes(candidate));
+        if (!isAccepted) return false;
+        return integration.active === true;
+    });
 }
 
 async function loadIntegrationVisibility(apiKey) {
@@ -3905,7 +3897,10 @@ function validateOrbiswebRequiredFieldForIndex(index) {
 function showStatus(ui, message, type) {
     if (!ui || !ui.statusDiv) return;
     const statusDiv = ui.statusDiv;
-    const hasGesinturBanner = cachedGesinturStatus === true;
+    const activeIntegrationBanners = [];
+    if (cachedAvsisStatus === true) activeIntegrationBanners.push('✅ Integración AVSIS ACTIVA.');
+    if (cachedGesinturStatus === true) activeIntegrationBanners.push('✅ Integración Gesintur ACTIVA.');
+    if (cachedOrbiswebStatus === true) activeIntegrationBanners.push('✅ Integración Pipeline/ORBISWEB ACTIVA.');
     const transientMessage = String(message ?? '')
         .replace(/(?:^|\s)(?:✅\s*)?Integración\s+[A-Za-zÁÉÍÓÚÜÑ0-9/_-]+\s+ACTIVA\.?/gi, ' ')
         .replace(/\s+/g, ' ')
@@ -3915,22 +3910,22 @@ function showStatus(ui, message, type) {
     statusDiv.innerHTML = '';
     statusDiv.className = '';
 
-    if (hasGesinturBanner) {
+    activeIntegrationBanners.forEach((bannerText) => {
         const banner = document.createElement('div');
         banner.className = 'status-success';
-        banner.textContent = '✅ Integración Gesintur ACTIVA.';
+        banner.textContent = bannerText;
         statusDiv.appendChild(banner);
-    }
+    });
 
     if (hasTransientMessage) {
         const transient = document.createElement('div');
         transient.className = `status-${type || 'info'}`;
         transient.textContent = transientMessage;
-        if (hasGesinturBanner) transient.style.marginTop = '6px';
+        if (activeIntegrationBanners.length > 0) transient.style.marginTop = '6px';
         statusDiv.appendChild(transient);
     }
 
-    statusDiv.style.display = (hasGesinturBanner || hasTransientMessage) ? 'block' : 'none';
+    statusDiv.style.display = (activeIntegrationBanners.length > 0 || hasTransientMessage) ? 'block' : 'none';
 }
 
 function showSpinner(ui, show) {
