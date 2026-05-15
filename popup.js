@@ -26,6 +26,7 @@ let currentFolderName = 'Inicio';
 let _airlinesIataCache = null;
 const CAPTURE_HIDE_EMPTY_RULES_KEY = 'captureHideWhenEmptyRules';
 const STANDARD_FIELD_VISIBILITY_REFRESH_KEY = 'standardFieldVisibilityRefreshTs';
+const INTEGRATION_FIELD_VISIBILITY_REFRESH_KEY = 'integrationFieldVisibilityRefreshTs';
 let captureHideWhenEmptyRules = {};
 let currentCaptureDomain = '';
 
@@ -150,6 +151,44 @@ function buildGenericFlightDescription(data) {
 
 function normalizeFieldSlug(value) {
     return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+const GESINTUR_FIELD_ALIAS_GROUPS = [
+    ['accion'],
+    ['codigo_oficina', 'cod_oficina'],
+    ['codigo_expediente', 'cod_expediente'],
+    ['accion_facturacion']
+];
+
+function getGesinturFieldAliases(fieldName) {
+    const normalizedField = normalizeFieldSlug(fieldName);
+    const group = GESINTUR_FIELD_ALIAS_GROUPS.find((aliases) =>
+        aliases.some((alias) => normalizeFieldSlug(alias) === normalizedField)
+    );
+    return group ? [...group] : [String(fieldName || '')];
+}
+
+function resolveGesinturFieldForRender(baseField, data = null, schemaCandidates = null) {
+    const aliases = getGesinturFieldAliases(baseField);
+    const dataObj = (data && typeof data === 'object') ? data : null;
+    if (dataObj) {
+        const preferredFromData = aliases.find((alias) => Object.prototype.hasOwnProperty.call(dataObj, alias));
+        if (preferredFromData) return preferredFromData;
+    }
+    if (schemaCandidates instanceof Set && schemaCandidates.size > 0) {
+        const preferredFromSchema = aliases.find((alias) => schemaCandidates.has(alias));
+        if (preferredFromSchema) return preferredFromSchema;
+    }
+    return aliases[0];
+}
+
+function getGesinturFieldValue(data, baseField) {
+    const dataObj = (data && typeof data === 'object') ? data : null;
+    if (!dataObj) return '';
+    const aliases = getGesinturFieldAliases(baseField);
+    const preferredAlias = aliases.find((alias) => Object.prototype.hasOwnProperty.call(dataObj, alias));
+    if (preferredAlias) return dataObj[preferredAlias];
+    return '';
 }
 
 function findFirstFieldByNormalizedName(fields, acceptedNormalizedNames) {
@@ -472,6 +511,16 @@ document.addEventListener('DOMContentLoaded', () => {
             (async () => {
                 const { userApiKey } = await chrome.storage.local.get('userApiKey');
                 await loadStandardFieldVisibilityForPopup(userApiKey || "");
+                const { savedReservationData } = await chrome.storage.local.get('savedReservationData');
+                if (typeof buildMultiEditableForm === 'function' && ui && Array.isArray(savedReservationData) && savedReservationData.length > 0) {
+                    buildMultiEditableForm(ui, savedReservationData);
+                }
+            })();
+        }
+        if (namespace === 'local' && changes[INTEGRATION_FIELD_VISIBILITY_REFRESH_KEY]) {
+            (async () => {
+                const { userApiKey } = await chrome.storage.local.get('userApiKey');
+                await loadIntegrationFieldVisibility(userApiKey || "");
                 const { savedReservationData } = await chrome.storage.local.get('savedReservationData');
                 if (typeof buildMultiEditableForm === 'function' && ui && Array.isArray(savedReservationData) && savedReservationData.length > 0) {
                     buildMultiEditableForm(ui, savedReservationData);
@@ -1462,6 +1511,12 @@ async function initializeCaptureTab(ui) {
 
             await loadIntegrationVisibility(userApiKey);
             await loadIntegrationFieldVisibility(userApiKey);
+            const avsisResultEffective = applyIntegrationStatusFallbackFromVisibility(avsisResult, 'avsis', '✅ Integración AVSIS ACTIVA.');
+            const gesinturResultEffective = applyIntegrationStatusFallbackFromVisibility(gesinturResult, 'gesintur', '✅ Integración Gesintur ACTIVA.');
+            const orbiswebResultEffective = applyIntegrationStatusFallbackFromVisibility(orbiswebResult, 'orbisweb', '✅ Integración Pipeline/ORBISWEB ACTIVA.');
+            cachedAvsisStatus = avsisResultEffective.active;
+            cachedGesinturStatus = gesinturResultEffective.active;
+            cachedOrbiswebStatus = orbiswebResultEffective.active;
             
             // Actualizar visibilidad de desplegables según integraciones activas
             updateServiceTypeVisibility();
@@ -1474,11 +1529,11 @@ async function initializeCaptureTab(ui) {
             
             // Preparar mensajes de estado
             const messages = ['Mostrando última reserva capturada.'];
-            const hasActiveIntegrations = avsisResult.active || gesinturResult.active || orbiswebResult.active;
+            const hasActiveIntegrations = avsisResultEffective.active || gesinturResultEffective.active || orbiswebResultEffective.active;
             
-            if (avsisResult.message) messages.push(avsisResult.message);
-            if (gesinturResult.message) messages.push(gesinturResult.message);
-            if (orbiswebResult.message) messages.push(orbiswebResult.message);
+            if (avsisResultEffective.message) messages.push(avsisResultEffective.message);
+            if (gesinturResultEffective.message) messages.push(gesinturResultEffective.message);
+            if (orbiswebResultEffective.message) messages.push(orbiswebResultEffective.message);
             
             showStatus(ui, messages.join(' '), hasActiveIntegrations ? 'success' : 'info');
         } else {
@@ -1505,6 +1560,12 @@ async function initializeCaptureTab(ui) {
 
             await loadIntegrationVisibility(userApiKey);
             await loadIntegrationFieldVisibility(userApiKey);
+            const avsisResultEffective = applyIntegrationStatusFallbackFromVisibility(avsisResult, 'avsis', '✅ Integración AVSIS ACTIVA.');
+            const gesinturResultEffective = applyIntegrationStatusFallbackFromVisibility(gesinturResult, 'gesintur', '✅ Integración Gesintur ACTIVA.');
+            const orbiswebResultEffective = applyIntegrationStatusFallbackFromVisibility(orbiswebResult, 'orbisweb', '✅ Integración Pipeline/ORBISWEB ACTIVA.');
+            cachedAvsisStatus = avsisResultEffective.active;
+            cachedGesinturStatus = gesinturResultEffective.active;
+            cachedOrbiswebStatus = orbiswebResultEffective.active;
             
             // Actualizar visibilidad de desplegables según integraciones activas
             updateServiceTypeVisibility();
@@ -1515,14 +1576,14 @@ async function initializeCaptureTab(ui) {
             }
             
             const messages = [];
-            if (avsisResult.message) messages.push(avsisResult.message);
-            if (gesinturResult.message) messages.push(gesinturResult.message);
-            if (orbiswebResult.message) messages.push(orbiswebResult.message);
+            if (avsisResultEffective.message) messages.push(avsisResultEffective.message);
+            if (gesinturResultEffective.message) messages.push(gesinturResultEffective.message);
+            if (orbiswebResultEffective.message) messages.push(orbiswebResultEffective.message);
             
             if (messages.length > 0) {
                 showStatus(ui, messages.join(' '), 'success');
             } else {
-                ui.statusDiv.style.display = 'none';
+                showStatus(ui, '', 'info');
             }
         } else {
             showStatus(ui, 'Por favor, guarda tu API Key.', 'info');
@@ -1589,6 +1650,15 @@ async function checkOrbiswebStatus(apiKey) {
     }
 }
 
+function applyIntegrationStatusFallbackFromVisibility(result, slug, activeMessage) {
+    const current = result && typeof result === 'object' ? result : { active: false, message: '' };
+    if (current.active) return current;
+    if (cachedIntegrationVisibility && cachedIntegrationVisibility[slug] === true) {
+        return { active: true, message: activeMessage };
+    }
+    return current;
+}
+
 async function loadIntegrationVisibility(apiKey) {
     try {
         const res = await chrome.runtime.sendMessage({ action: 'getIntegrationVisibility', apiKey });
@@ -1620,8 +1690,13 @@ async function loadIntegrationFieldVisibility(apiKey) {
 function isIntegrationFieldVisible(slug, fieldName) {
     const vis = cachedIntegrationFieldVisibility[slug];
     if (!vis || typeof vis !== 'object') return true;
-    if (!(fieldName in vis)) return true;
-    return vis[fieldName] !== 0;
+    if (fieldName in vis) return vis[fieldName] !== 0;
+    if (slug === 'gesintur') {
+        const aliases = getGesinturFieldAliases(fieldName);
+        const aliasHit = aliases.find((alias) => alias in vis);
+        if (aliasHit) return vis[aliasHit] !== 0;
+    }
+    return true;
 }
 
 function normalizeCaptureScopeDomain(domain) {
@@ -1923,7 +1998,7 @@ function showWrongUrlGuidanceModal(urlGuidance) {
 
     const guidance = urlGuidance?.guidance || null;
     const customText = (guidance?.instruction_text || '').trim();
-    const defaultMsg = 'Esta web está soportada para captura, pero estás en un lugar incorrecto. Realiza la captura desde una de las URLs mapeadas:';
+    const defaultMsg = 'Esta web está soportada para captura, pero estás en un lugar incorrecto. Realiza la captura desde una de las siguientes URLs :';
 
     if (messageEl) {
         messageEl.textContent = customText || defaultMsg;
@@ -2421,11 +2496,14 @@ function buildMultiEditableForm(ui, reservationsData) {
 
         const fieldsToRenderSet = new Set(fieldsToRender);
 
+        const giavAutomationFields = ['accion', 'codigo_oficina', 'codigo_expediente', 'accion_facturacion'];
+
         // 3.1 Dibujar campos dinámicos generales
         fieldsToRender.forEach(field => {
             if (field === 'pasajeros' || field === 'num_pasajeros' || field === 'proveedor_nombre') return;
             if (field === 'descripcion' && !shouldUseGenericDescription) return;
             if (OUTBOUND_SEGMENT_FIELDS.includes(field) || RETURN_SEGMENT_FIELDS.includes(field)) return;
+            if (giavAutomationFields.includes(field)) return;
             if (resTypeBase === 'aereo' && normalizeFieldSlug(field) === 'codigoreserva') return;
 
             const fieldElement = createFieldElement(field, data[field], index, { reservationType: rawResType });
@@ -2450,6 +2528,47 @@ function buildMultiEditableForm(ui, reservationsData) {
             const passengersElement = createFieldElement('pasajeros', data.pasajeros, index, { showPassengerDescription, reservationType: rawResType });
             if (passengersElement) {
                 wrapper.appendChild(passengersElement);
+            }
+        }
+
+        // 4.1 Campos de automatización GIAV bajo pasajeros (entre dos franjas)
+        if (typeof cachedGesinturStatus !== 'undefined' && cachedGesinturStatus && cachedIntegrationVisibility.gesintur !== false) {
+            const gesinturSchemaFields = new Set([
+                ...(Array.isArray(GESINTUR_NORMAL_FIELDS) ? GESINTUR_NORMAL_FIELDS : []),
+                ...(Array.isArray(GESINTUR_BILETE_FIELDS) ? GESINTUR_BILETE_FIELDS : [])
+            ]);
+            const giavVisibleFields = giavAutomationFields
+                .map((field) => {
+                    const aliases = getGesinturFieldAliases(field);
+                    if (!aliases.some((alias) => isIntegrationFieldVisible('gesintur', alias))) return null;
+                    const renderField = resolveGesinturFieldForRender(field, data, gesinturSchemaFields);
+                    return {
+                        renderField,
+                        value: getGesinturFieldValue(data, field)
+                    };
+                })
+                .filter(Boolean);
+            if (giavVisibleFields.length > 0) {
+                const fieldsDiv = document.createElement('div');
+                fieldsDiv.className = 'fields-grid-container';
+                giavVisibleFields.forEach(({ renderField, value }) => {
+                    const el = createFieldElement(renderField, value, index, { reservationType: rawResType });
+                    if (el) {
+                        const input = el.querySelector('input, select, textarea');
+                        if (input) {
+                            input.id = `gesintur_${renderField}_${index}`;
+                            input.name = `gesintur_${renderField}_${index}`;
+                        }
+                        fieldsDiv.appendChild(el);
+                    }
+                });
+                if (fieldsDiv.children.length > 0) {
+                    const giavAutomationContainer = document.createElement('div');
+                    giavAutomationContainer.className = 'giav-automation-fields-container erp-fields-block';
+                    giavAutomationContainer.style.cssText = 'margin-top: 14px; padding: 10px 0; border-top: 1px solid #e5e7eb;';
+                    giavAutomationContainer.appendChild(fieldsDiv);
+                    wrapper.appendChild(giavAutomationContainer);
+                }
             }
         }
 
@@ -2513,6 +2632,7 @@ function buildMultiEditableForm(ui, reservationsData) {
                 ? (typeof GESINTUR_BILETE_FIELDS !== 'undefined' ? GESINTUR_BILETE_FIELDS : [])
                 : (typeof GESINTUR_NORMAL_FIELDS !== 'undefined' ? GESINTUR_NORMAL_FIELDS : []);
             gesinturFields.forEach(field => {
+                if (giavAutomationFields.includes(field)) return;
                 if (!isIntegrationFieldVisible('gesintur', field)) return;
                 const el = createFieldElement(field, data[field], index, { reservationType: rawResType });
                 if (el) {
@@ -2968,13 +3088,21 @@ function updateBspVisualForReservation(index, reservationsData = null) {
 function shouldHideFieldInUI(fieldName, fieldMeta = null) {
     const normalizedField = String(fieldName || '').toLowerCase();
 
+    // Campos de automatización GIAV: su visibilidad SOLO se controla por la integración Gesintur,
+    // nunca por la visibilidad estándar genérica (que combinaría scopes owner+integration y suele
+    // dar conflictos: aunque el usuario marque visible en owner, una regla de integración a 0 ganaría
+    // y dejaría el campo permanentemente oculto sin forma clara de revertirlo desde la UI).
+    if (cachedGesinturStatus && isGiavAutomationField(fieldName)) {
+        return !isIntegrationFieldVisible('gesintur', normalizedField);
+    }
+
     if (cachedStandardFieldVisibility && typeof cachedStandardFieldVisibility === 'object' && normalizedField in cachedStandardFieldVisibility) {
         if (cachedStandardFieldVisibility[normalizedField] === 0) {
             return true;
         }
     }
 
-    const gesinturOnlyFields = new Set(['codigo_oficina', 'codigo_expediente', 'accion_facturacion', 'gastos_gestion', 'recuperacion', 'num_pedido']);
+    const gesinturOnlyFields = new Set(['accion', 'codigo_oficina', 'cod_oficina', 'codigo_expediente', 'cod_expediente', 'accion_facturacion', 'gastos_gestion', 'recuperacion', 'num_pedido']);
     if (gesinturOnlyFields.has(normalizedField) && !cachedGesinturStatus) {
         return true;
     }
@@ -3045,6 +3173,11 @@ function isResidenteFamNumerosaField(fieldName, fieldMeta = null) {
         )
     );
     return looksLikeCombinedField(normalizedField) || looksLikeCombinedField(normalizedLabel);
+}
+
+function isGiavAutomationField(fieldName) {
+    const normalized = normalizeFieldSlug(fieldName);
+    return ['accion', 'codigooficina', 'codoficina', 'codigoexpediente', 'codexpediente', 'accionfacturacion'].includes(normalized);
 }
 
 function shouldHideFieldInCaptureUI(fieldName, fieldMeta = null) {
@@ -3260,7 +3393,7 @@ function createFieldElement(fieldName, value, index, options = {}) {
         group.appendChild(switchLabel);
         return group;
 
-    } else if (fieldMeta.type === 'enum' || fieldName === 'tipo_residente' || fieldName === 'tipo_familia_numerosa' || fieldName === 'accion_facturacion') {
+    } else if (fieldMeta.type === 'enum' || fieldName === 'tipo_residente' || fieldName === 'tipo_familia_numerosa' || fieldName === 'accion' || fieldName === 'accion_facturacion') {
         input = document.createElement('select');
         input.id = fieldId;
         input.name = fieldId;
@@ -3270,6 +3403,7 @@ function createFieldElement(fieldName, value, index, options = {}) {
         if (options.length === 0) {
             if (fieldName === 'tipo_residente') options = ['', 'Sin descuento', 'Residente islas o Ceuta (75%)'];
             if (fieldName === 'tipo_familia_numerosa') options = ['', 'Sin descuento', 'Fam. numerosa general (5%)', 'Fam. numerosa especial (10%)'];
+            if (fieldName === 'accion') options = ['solo_captura', 'volcar_expediente'];
             if (fieldName === 'accion_facturacion') options = ['ninguna', 'facturar_cliente', 'facturar_pasajeros'];
         }
 
@@ -3518,6 +3652,11 @@ async function collectSingleFieldData(index) {
     }
 
     data.reservation_type = reservationType;
+    const selectedServiceType = getReservationTypeBase(
+        String(document.getElementById('mainServiceType')?.value || selectedReservationType || reservationType || 'aereo')
+    );
+    const isGiavActive = cachedGesinturStatus && cachedIntegrationVisibility.gesintur !== false;
+    data.tipo = (isGiavActive && selectedServiceType === 'aereo') ? 'AV' : selectedServiceType;
     
     // 8. PROCESAR PASAJEROS (Actualizar números de billete editados)
     if (data.pasajeros && Array.isArray(data.pasajeros)) {
@@ -3543,7 +3682,7 @@ async function collectSingleFieldData(index) {
     }
 
     // Construir objeto final solo con las claves que queremos enviar (evita enviar datos viejos/legacy que provocan bugs)
-    const allowedKeys = new Set([...fieldsToCollect, 'pasajeros', 'num_pax', 'reservation_type', 'titular', 'strtitular']);
+    const allowedKeys = new Set([...fieldsToCollect, 'pasajeros', 'num_pax', 'reservation_type', 'tipo', 'titular', 'strtitular']);
     if (window.CUSTOM_SCHEMA && Array.isArray(window.CUSTOM_SCHEMA)) {
         window.CUSTOM_SCHEMA.forEach(cf => { if (cf?.slug) allowedKeys.add(cf.slug); });
     }
@@ -3764,10 +3903,34 @@ function validateOrbiswebRequiredFieldForIndex(index) {
 }
 
 function showStatus(ui, message, type) {
-    // El statusDiv ahora es común, así que está bien
-    ui.statusDiv.textContent = message;
-    ui.statusDiv.className = `status-${type}`;
-    ui.statusDiv.style.display = 'block';
+    if (!ui || !ui.statusDiv) return;
+    const statusDiv = ui.statusDiv;
+    const hasGesinturBanner = cachedGesinturStatus === true;
+    const transientMessage = String(message ?? '')
+        .replace(/(?:^|\s)(?:✅\s*)?Integración\s+[A-Za-zÁÉÍÓÚÜÑ0-9/_-]+\s+ACTIVA\.?/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const hasTransientMessage = transientMessage.length > 0;
+
+    statusDiv.innerHTML = '';
+    statusDiv.className = '';
+
+    if (hasGesinturBanner) {
+        const banner = document.createElement('div');
+        banner.className = 'status-success';
+        banner.textContent = '✅ Integración Gesintur ACTIVA.';
+        statusDiv.appendChild(banner);
+    }
+
+    if (hasTransientMessage) {
+        const transient = document.createElement('div');
+        transient.className = `status-${type || 'info'}`;
+        transient.textContent = transientMessage;
+        if (hasGesinturBanner) transient.style.marginTop = '6px';
+        statusDiv.appendChild(transient);
+    }
+
+    statusDiv.style.display = (hasGesinturBanner || hasTransientMessage) ? 'block' : 'none';
 }
 
 function showSpinner(ui, show) {
