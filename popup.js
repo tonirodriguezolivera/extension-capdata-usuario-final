@@ -298,6 +298,10 @@ function getReservationTypeBase(reservationType) {
     return rawType.split('_')[0] || 'aereo';
 }
 
+function normalizeTicketNumberValue(rawValue) {
+    return String(rawValue ?? '').replace(/\D+/g, '');
+}
+
 function isGiavReservationFlow(reservationType) {
     const baseType = getReservationTypeBase(reservationType);
     const isFlightFlow = reservationType === 'billetaje' || baseType === 'aereo';
@@ -2859,6 +2863,11 @@ function buildMultiEditableForm(ui, reservationsData) {
 
     // B) Sincronizar inputs de PASAJEROS
     ui.standardFieldsContainer.querySelectorAll('.pax-data-input').forEach(input => {
+        if (input.getAttribute('data-key') === 'num_billete') {
+            input.addEventListener('input', (e) => {
+                e.target.value = normalizeTicketNumberValue(e.target.value);
+            });
+        }
         input.addEventListener('change', (e) => {
             const resIdx = e.target.getAttribute('data-res-index');
             const paxIdx = e.target.getAttribute('data-pax-index');
@@ -2867,7 +2876,12 @@ function buildMultiEditableForm(ui, reservationsData) {
             if (resIdx !== null && paxIdx !== null && key && reservationsData[resIdx]) {
                 const val = (key === 'is_residente' || key === 'is_familia_numerosa' || key === 'residente_fam_numerosa')
                     ? (e.target.value === 'true')
-                    : e.target.value;
+                    : (key === 'num_billete'
+                        ? normalizeTicketNumberValue(e.target.value)
+                        : e.target.value);
+                if (key === 'num_billete') {
+                    e.target.value = val;
+                }
                 if (!reservationsData[resIdx].pasajeros) reservationsData[resIdx].pasajeros = [];
                 if (reservationsData[resIdx].pasajeros[paxIdx]) {
                     reservationsData[resIdx].pasajeros[paxIdx][key] = val;
@@ -3556,7 +3570,7 @@ function createFieldElement(fieldName, value, index, options = {}) {
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
                     <div>
                         <label style="display: block; font-size: 10px; color: #6b7280;">Nº Billete:</label>
-                        <input type="text" class="pax-data-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="num_billete" value="${pax.num_billete || ''}" style="width:100%; padding:4px; font-size:11px; border:1px solid #ccc; border-radius:4px;">
+                        <input type="text" class="pax-data-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="num_billete" value="${normalizeTicketNumberValue(pax.num_billete || '')}" style="width:100%; padding:4px; font-size:11px; border:1px solid #ccc; border-radius:4px;">
                     </div>
                     <div>
                         <label style="display: block; font-size: 10px; color: #6b7280;">Tipo Pasajero:</label>
@@ -3927,7 +3941,9 @@ async function collectSingleFieldData(index) {
             const ticketInput = document.getElementById(`pax_ticket_${index}_${paxIndex}`);
             const passengerData = { ...pax };
             if (ticketInput) {
-                passengerData.num_billete = ticketInput.value.trim();
+                passengerData.num_billete = normalizeTicketNumberValue(ticketInput.value);
+            } else if (Object.prototype.hasOwnProperty.call(passengerData, 'num_billete')) {
+                passengerData.num_billete = normalizeTicketNumberValue(passengerData.num_billete);
             }
             return passengerData;
         });

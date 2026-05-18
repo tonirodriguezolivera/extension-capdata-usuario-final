@@ -583,7 +583,7 @@ async function extractDataUsingMappings(tabId, mappingsNormal, mappingsOneWay, d
                                     let cleaned = String(val || '').trim();
                                     if (!cleaned) return '';
                                     cleaned = cleaned.replace(/^(?:ticket|billete|n[º°o]\s*billete|numero\s*billete|n[úu]mero\s*billete)\s*[:#-]?\s*/i, '').trim();
-                                    return cleaned;
+                                    return cleaned.replace(/\D+/g, '');
                                 };
                                 if (ticketFieldName) {
                                     const ticketMapping = activeMappings[ticketFieldName];
