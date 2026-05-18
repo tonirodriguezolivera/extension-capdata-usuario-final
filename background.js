@@ -293,12 +293,87 @@ async function extractDataUsingMappings(tabId, mappingsNormal, mappingsOneWay, d
                     }
                     return el.textContent?.trim() || el.innerText?.trim() || '';
                 };
+                // Divide un selector compuesto "A, B" en candidatos respetando
+                // parentesis, corchetes y comillas para no romper :is(a,b),
+                // [attr="a,b"] o :contains('a,b').
+                const getSelectorCandidates = (rawSelector = '') => {
+                    const selectorText = String(rawSelector || '').trim();
+                    if (!selectorText) return [];
+                    if (!selectorText.includes(',')) return [selectorText];
+                    const parts = [];
+                    let depthParen = 0;
+                    let depthBracket = 0;
+                    let inQuote = null;
+                    let current = '';
+                    for (let i = 0; i < selectorText.length; i++) {
+                        const ch = selectorText[i];
+                        const prev = i > 0 ? selectorText[i - 1] : '';
+                        if (inQuote) {
+                            if (ch === inQuote && prev !== '\\') inQuote = null;
+                            current += ch;
+                            continue;
+                        }
+                        if (ch === '"' || ch === "'") { inQuote = ch; current += ch; continue; }
+                        if (ch === '(') depthParen++;
+                        else if (ch === ')') depthParen = Math.max(0, depthParen - 1);
+                        else if (ch === '[') depthBracket++;
+                        else if (ch === ']') depthBracket = Math.max(0, depthBracket - 1);
+                        if (ch === ',' && depthParen === 0 && depthBracket === 0) {
+                            const trimmed = current.trim();
+                            if (trimmed) parts.push(trimmed);
+                            current = '';
+                            continue;
+                        }
+                        current += ch;
+                    }
+                    const tail = current.trim();
+                    if (tail) parts.push(tail);
+                    return parts.length > 0 ? parts : [selectorText];
+                };
+                // Fallback estricto por candidatos:
+                //  1. Recorre los candidatos en el orden definido por el usuario.
+                //  2. Devuelve el primero cuyo elemento exista Y tenga valor significativo.
+                //  3. Si ninguno es significativo, devuelve el primer match (best-effort)
+                //     para no perder por completo el campo.
+                // Asi, "selectorA, selectorB" prueba A; si A no esta en el DOM o
+                // su valor esta vacio/ruidoso, prueba B. Aplica a CUALQUIER campo.
+                const resolveMappedElementWithFallback = (rawSelector, extractionMethod, fieldName = null) => {
+                    const candidates = getSelectorCandidates(rawSelector);
+                    let firstMatch = null;
+                    const isMeaningfulRawValueForField = (fieldName, rawValue) => {
+                        if (!hasNonEmptyValue(rawValue)) return false;
+                        const valueText = String(rawValue).trim();
+                        const codeLikeFields = ['localizador', 'codigo_reserva', 'num_vuelo_ida', 'num_vuelo_vuelta', 'Ida_Codigo', 'Vuelta_Codigo'];
+                        if (!codeLikeFields.includes(fieldName)) return valueText !== '';
+                        let cleaned = valueText;
+                        if (cleaned.includes(':')) cleaned = cleaned.split(':').pop();
+                        cleaned = cleaned
+                            .replace(/(booking|code|reserva|vuelo|flight|ref|n[º#\.]|num\.?|no\.?|número)/gi, '')
+                            .replace(/^[^a-z0-9]+/gi, '')
+                            .trim();
+                        return cleaned !== '';
+                    };
+                    for (const candidateSelector of candidates) {
+                        const candidateEl = smartQuerySelector(candidateSelector);
+                        if (!candidateEl) continue;
+                        const candidateValue = readMappedPresenceValue(candidateEl, extractionMethod);
+                        if (!firstMatch) {
+                            firstMatch = { element: candidateEl, value: candidateValue };
+                        }
+                        if (isMeaningfulRawValueForField(fieldName, candidateValue)) {
+                            return { element: candidateEl, value: candidateValue };
+                        }
+                    }
+                    return firstMatch;
+                };
 
                 for (const anchor of returnAnchors) {
                     if (mappingsNormal[anchor]) {
-                        const el = smartQuerySelector(mappingsNormal[anchor].selector_path);
-                        const anchorValue = readMappedPresenceValue(el, mappingsNormal[anchor].extraction_method);
-                        if (el && hasNonEmptyValue(anchorValue)) {
+                        const resolvedAnchor = resolveMappedElementWithFallback(
+                            mappingsNormal[anchor].selector_path,
+                            mappingsNormal[anchor].extraction_method
+                        );
+                        if (resolvedAnchor?.element && hasNonEmptyValue(resolvedAnchor.value)) {
                             hasConfirmedReturnSection = true;
                             break;
                         }
@@ -313,10 +388,11 @@ async function extractDataUsingMappings(tabId, mappingsNormal, mappingsOneWay, d
                         const mappedSelector = mappedConfig?.selector_path;
                         if (!mappedSelector) continue;
 
-                        const returnEl = smartQuerySelector(mappedSelector);
+                        const resolvedReturn = resolveMappedElementWithFallback(mappedSelector, mappedConfig?.extraction_method);
+                        const returnEl = resolvedReturn?.element;
                         if (!returnEl) continue;
 
-                        const mappedValue = readMappedPresenceValue(returnEl, mappedConfig?.extraction_method);
+                        const mappedValue = resolvedReturn?.value;
                         const isVisibleLike = returnEl.getClientRects().length > 0;
                         if (hasNonEmptyValue(mappedValue) || isVisibleLike) {
                             hasConfirmedReturnSection = true;
@@ -581,39 +657,10 @@ async function extractDataUsingMappings(tabId, mappingsNormal, mappingsOneWay, d
                         }
 
                         // B. BÚSQUEDA DEL ELEMENTO ESTÁNDAR
-                        let element = smartQuerySelector(selector);
-                        const allowLevel2 = !isReturnField || hasConfirmedReturnSection || hasReturnFieldEvidence;
-
-                        if (!element && !selector.includes(':contains(') && allowLevel2) {
-                            const idMatch = selector.match(/(#[a-zA-Z0-9_-]+)/);
-                            const parts = selector.split(/[ >]+/);
-                            const lastPart = parts[parts.length - 1];
-                            if (idMatch && lastPart) {
-                                const ancestorId = idMatch[0];
-                                const simplifiedSelector = `${ancestorId} ${lastPart}`;
-                                const fallbacks = document.querySelectorAll(simplifiedSelector);
-                                for (const fb of fallbacks) {
-                                    const counterpart = fieldName.replace('vuelta', 'ida');
-                                    if (results.element_refs[counterpart] !== fb) {
-                                        element = fb;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        let value = '';
-                        if (element) {
-                            results.element_refs[fieldName] = element;
-                            if (method === 'value') {
-                                value = element.value || '';
-                            } else if (method.startsWith('data-')) {
-                                const attrName = method.replace('data-', '');
-                                value = element.getAttribute(`data-${attrName}`) || '';
-                            } else {
-                                value = element.textContent?.trim() || element.innerText?.trim() || '';
-                            }
-                        }
+                        const resolvedElement = resolveMappedElementWithFallback(selector, method, fieldName);
+                        let element = resolvedElement?.element || null;
+                        let value = resolvedElement?.value || '';
+                        if (element) results.element_refs[fieldName] = element;
                         // Aplicar regex de extracción si está definido para este campo
                         if (fieldRegex && fieldRegex[fieldName] && value && String(value).trim() !== '') {
                             try {
@@ -872,78 +919,7 @@ async function extractDataUsingMappings(tabId, mappingsNormal, mappingsOneWay, d
         const result = extractionResults[0]?.result;
         if (!result) throw new Error("La inyección de script no devolvió resultados.");
 
-        // --- NIVEL 3: RESCATE CON IA ---
-        const failedFieldsEntries = Object.entries(result.failed_fields);
-        if (failedFieldsEntries.length > 0) {
-            for (const [fieldName, info] of failedFieldsEntries) {
-                if (info.ancestor_id) {
-                    try {
-                        const htmlSnippetResult = await chrome.scripting.executeScript({
-                            target: { tabId: tabId },
-                            func: (id) => {
-                                const container = document.querySelector(id);
-                                return container ? container.outerHTML : null;
-                            },
-                            args: [info.ancestor_id]
-                        });
-
-                        const htmlSnippet = htmlSnippetResult[0]?.result;
-                        if (htmlSnippet) {
-                            const aiResponse = await fetch(`${API_BASE_URL}/api/find-specific-selectors`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
-                                body: JSON.stringify({ field_name: fieldName, domain: domain, field_type: 'capture', html: htmlSnippet })
-                            });
-                            
-                            const aiData = await aiResponse.json();
-                            if (aiData.status === 'success' && aiData.mapping && aiData.mapping.selector) {
-                                const targetSelector = aiData.mapping.selector;
-                                const finalExtraction = await chrome.scripting.executeScript({
-                                    target: { tabId: tabId },
-                                    func: (sel, fName, cleanDom, sType) => {
-                                        const el = document.querySelector(sel);
-                                        let val = el ? (el.textContent?.trim() || el.innerText?.trim() || '') : '';
-                                        const isReturn = fName.includes('vuelta') || fName.includes('llegada');
-
-                                        if (val.trim() !== '') {
-                                            if (['localizador', 'codigo_reserva', 'num_vuelo_ida', 'num_vuelo_vuelta', 'Ida_Codigo', 'Vuelta_Codigo'].includes(fName)) {
-                                                if (val.includes(':')) val = val.split(':').pop();
-                                                val = val.replace(/(booking|code|reserva|vuelo|flight|ref|n[º#\.]|num\.?|no\.?|número)/gi, '').replace(/^[^a-z0-9]+/gi, '').trim();
-                                            }
-                                            if (fName.includes('aeropuerto')) {
-                                                const m = val.match(/\(?\b([a-zA-Z]{3})\b\)?/);
-                                                if (m) val = m[1].toUpperCase();
-                                            }
-                                            if (fName === 'divisa') {
-                                                if (/^\d+([.,]\d+)?\s*$/.test(val.trim())) val = '';
-                                                else {
-                                                    const v = val.trim().toLowerCase();
-                                                    if (v.includes('€') || v === 'euro' || v === 'eur') val = 'EUR';
-                                                    else if (v.includes('$') || v.includes('dolar') || v.includes('dólar') || v === 'usd') val = 'USD';
-                                                    else if (v.includes('£') || v.includes('libra') || v === 'gbp') val = 'GBP';
-                                                    else { const m = val.match(/\b([A-Z]{3})\b/i); if (m) val = m[1].toUpperCase(); }
-                                                }
-                                            }
-                                        }
-
-                                        const ids = { 'aereo': ['aerolinea_ida', 'aerolinea_vuelta', 'Ida_Compania', 'Vuelta_Compania'], 'hotel': ['nombre_hotel'], 'rent_a_car': ['empresa_alquiler'], 'tren': ['operador_tren'] };
-                                        if ((ids[sType] || []).includes(fName)) return val || cleanDom;
-                                        return val;
-                                    },
-                                    args: [targetSelector, fieldName, cleanDomainName, reservationType]
-                                });
-
-                                if (finalExtraction[0]?.result) {
-                                    result.extracted_fields[fieldName] = finalExtraction[0].result;
-                                }
-                            }
-                        }
-                    } catch (aiErr) { console.error(`Error IA:`, aiErr); }
-                }
-            }
-        }
-
-        // Seguridad adicional: tras rescate IA, mantener fallback de proveedor si sigue vacío.
+        // Modo estricto: solo usar selectores mapeados (sin rescate IA).
         const domainWithoutWww = (domain || '').replace(/^www\./i, '').trim();
         const providerFallback = cleanDomainName || domainWithoutWww;
         if (!result.extracted_fields['proveedor_nombre'] || String(result.extracted_fields['proveedor_nombre']).trim() === '') {
@@ -1206,11 +1182,46 @@ async function startFullCaptureProcess(apiKey, tabId, reservationType) {
         const selectorPresenceCheck = await chrome.scripting.executeScript({
             target: { tabId, frameIds: [0] },
             func: (selectors) => {
+                // Split robusto: respeta parentesis, corchetes y comillas para
+                // que "selA, selB" pruebe cada candidato por separado.
+                const splitCandidates = (raw) => {
+                    const text = String(raw || '').trim();
+                    if (!text) return [];
+                    if (!text.includes(',')) return [text];
+                    const parts = [];
+                    let dp = 0, db = 0, q = null, cur = '';
+                    for (let i = 0; i < text.length; i++) {
+                        const c = text[i];
+                        const p = i > 0 ? text[i - 1] : '';
+                        if (q) {
+                            if (c === q && p !== '\\') q = null;
+                            cur += c; continue;
+                        }
+                        if (c === '"' || c === "'") { q = c; cur += c; continue; }
+                        if (c === '(') dp++;
+                        else if (c === ')') dp = Math.max(0, dp - 1);
+                        else if (c === '[') db++;
+                        else if (c === ']') db = Math.max(0, db - 1);
+                        if (c === ',' && dp === 0 && db === 0) {
+                            const t = cur.trim();
+                            if (t) parts.push(t);
+                            cur = '';
+                            continue;
+                        }
+                        cur += c;
+                    }
+                    const tail = cur.trim();
+                    if (tail) parts.push(tail);
+                    return parts.length > 0 ? parts : [text];
+                };
                 for (const selector of selectors) {
-                    try {
-                        if (document.querySelector(selector)) return true;
-                    } catch (_) {
-                        // Ignorar selectores no válidos en esta comprobación de presencia.
+                    const candidates = splitCandidates(selector);
+                    for (const candidate of candidates) {
+                        try {
+                            if (document.querySelector(candidate)) return true;
+                        } catch (_) {
+                            // Ignorar selector candidato no valido y seguir probando.
+                        }
                     }
                 }
                 return false;

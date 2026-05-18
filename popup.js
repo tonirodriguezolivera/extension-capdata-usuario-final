@@ -160,6 +160,36 @@ const GESINTUR_FIELD_ALIAS_GROUPS = [
     ['accion_facturacion']
 ];
 
+const GIAV_LABEL_OVERRIDES = {
+    codigooficina: 'Cód. Oficina (Ej. 0000)',
+    codoficina: 'Cód. Oficina (Ej. 0000)',
+    codigoexpediente: 'Cód. Expediente (Ej. 2600014)',
+    codexpediente: 'Cód. Expediente (Ej. 2600014)'
+};
+
+const GIAV_SELECT_OPTION_LABELS = {
+    accion: {
+        solo_captura: 'Solo captura',
+        volcar_expediente: 'Volcar expediente'
+    },
+    accion_facturacion: {
+        ninguna: 'Ninguna',
+        facturar_cliente: 'Facturar cliente',
+        facturar_pasajeros: 'Facturar pasajeros'
+    }
+};
+
+function getGiavFieldLabelOverride(fieldName, fallbackLabel) {
+    const normalizedField = normalizeFieldSlug(fieldName);
+    return GIAV_LABEL_OVERRIDES[normalizedField] || fallbackLabel;
+}
+
+function getGiavSelectOptionLabel(fieldName, optionValue) {
+    const fieldLabels = GIAV_SELECT_OPTION_LABELS[String(fieldName || '').toLowerCase()];
+    if (!fieldLabels) return optionValue || '-- Seleccionar --';
+    return fieldLabels[String(optionValue)] || optionValue || '-- Seleccionar --';
+}
+
 function getGesinturFieldAliases(fieldName) {
     const normalizedField = normalizeFieldSlug(fieldName);
     const group = GESINTUR_FIELD_ALIAS_GROUPS.find((aliases) =>
@@ -274,6 +304,38 @@ function isGiavReservationFlow(reservationType) {
     const isGesinturFlow = cachedGesinturStatus;
     const isGiavFlow = !cachedAvsisStatus && !cachedGesinturStatus && !cachedOrbiswebStatus;
     return isFlightFlow && (isGesinturFlow || isGiavFlow);
+}
+
+function isGiavIntegrationActive() {
+    return cachedGesinturStatus === true && cachedIntegrationVisibility.gesintur !== false;
+}
+
+function updateGiavContactsVisibility() {
+    const contactsTabBtn = document.querySelector('.tab-btn[data-tab="fillContent"]');
+    const contactsPane = document.getElementById('fillContent');
+    const captureTabBtn = document.querySelector('.tab-btn[data-tab="captureContent"]');
+    const capturePane = document.getElementById('captureContent');
+    const giavActive = isGiavIntegrationActive();
+
+    if (contactsTabBtn) contactsTabBtn.style.display = giavActive ? 'none' : '';
+    if (contactsPane) contactsPane.style.display = giavActive ? 'none' : '';
+
+    if (giavActive && contactsPane?.classList.contains('active')) {
+        contactsPane.classList.remove('active');
+        contactsTabBtn?.classList.remove('active');
+        if (captureTabBtn) captureTabBtn.classList.add('active');
+        if (capturePane) capturePane.classList.add('active');
+        notifySizeChange();
+    }
+}
+
+function getGiavAwareSaveSuccessMessage(message) {
+    const rawMessage = String(message ?? '').trim();
+    if (!isGiavIntegrationActive() || !rawMessage) return rawMessage;
+    return rawMessage
+        .replace(/\s+y\s+\d+\s+contacto\(s\)\s+nuevo\(s\)\s+creado\(s\)\.?/i, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
 }
 
 function applyExclusiveGestionFields(fields, reservationType) {
@@ -480,6 +542,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const serviceTypeSelect = document.getElementById('mainServiceType');
     const errorMsg = document.getElementById('serviceTypeError');
+    updateGiavContactsVisibility();
 
     serviceTypeSelect.addEventListener('change', () => {
         if (serviceTypeSelect.value) {
@@ -661,6 +724,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Asegurar que la visibilidad de desplegables se actualice al cargar si la pestaña de Captura está activa
     setTimeout(() => {
         updateServiceTypeVisibility();
+        updateGiavContactsVisibility();
     }, 200);
     
     // Notificar cambios de tamaño después de que todo se haya cargado
@@ -1514,6 +1578,7 @@ async function initializeCaptureTab(ui) {
             
             // Actualizar visibilidad de desplegables según integraciones activas
             updateServiceTypeVisibility();
+            updateGiavContactsVisibility();
             
             // Mostrar selector de tipo ORBISWEB solo si orbisweb está activo
             const orbiswebTypeContainer = document.getElementById('orbiswebTypeContainer');
@@ -1557,6 +1622,7 @@ async function initializeCaptureTab(ui) {
             
             // Actualizar visibilidad de desplegables según integraciones activas
             updateServiceTypeVisibility();
+            updateGiavContactsVisibility();
             
             const orbiswebTypeContainer = document.getElementById('orbiswebTypeContainer');
             if (orbiswebTypeContainer) {
@@ -1575,8 +1641,10 @@ async function initializeCaptureTab(ui) {
             }
         } else {
             showStatus(ui, 'Por favor, guarda tu API Key.', 'info');
+            updateGiavContactsVisibility();
         }
     }
+    updateGiavContactsVisibility();
     showSpinner(ui, false);
 }
 
@@ -1934,11 +2002,46 @@ async function checkDomainMappings(domain, currentUrl, apiKey, reservationType) 
         const injection = await chrome.scripting.executeScript({
             target: { tabId: activeTabId, frameIds: [0] },
             func: (selectorList) => {
+                // Split robusto: respeta parentesis, corchetes y comillas para
+                // que "selA, selB" pruebe cada candidato por separado.
+                const splitCandidates = (raw) => {
+                    const text = String(raw || '').trim();
+                    if (!text) return [];
+                    if (!text.includes(',')) return [text];
+                    const parts = [];
+                    let dp = 0, db = 0, q = null, cur = '';
+                    for (let i = 0; i < text.length; i++) {
+                        const c = text[i];
+                        const p = i > 0 ? text[i - 1] : '';
+                        if (q) {
+                            if (c === q && p !== '\\') q = null;
+                            cur += c; continue;
+                        }
+                        if (c === '"' || c === "'") { q = c; cur += c; continue; }
+                        if (c === '(') dp++;
+                        else if (c === ')') dp = Math.max(0, dp - 1);
+                        else if (c === '[') db++;
+                        else if (c === ']') db = Math.max(0, db - 1);
+                        if (c === ',' && dp === 0 && db === 0) {
+                            const t = cur.trim();
+                            if (t) parts.push(t);
+                            cur = '';
+                            continue;
+                        }
+                        cur += c;
+                    }
+                    const tail = cur.trim();
+                    if (tail) parts.push(tail);
+                    return parts.length > 0 ? parts : [text];
+                };
                 for (const selector of selectorList) {
-                    try {
-                        if (document.querySelector(selector)) return true;
-                    } catch (_) {
-                        // Ignorar selectores no válidos en esta comprobación.
+                    const candidates = splitCandidates(selector);
+                    for (const candidate of candidates) {
+                        try {
+                            if (document.querySelector(candidate)) return true;
+                        } catch (_) {
+                            // Ignorar selector candidato no valido y seguir probando.
+                        }
                     }
                 }
                 return false;
@@ -2430,6 +2533,7 @@ function createJourneyDropdownBlock(title, fields, data, index, fieldsToRenderSe
 
 function buildMultiEditableForm(ui, reservationsData) {
     // 1. Limpiar el contenedor de cualquier formulario anterior.
+    closeActiveCustomSelectDropdown();
     ui.standardFieldsContainer.innerHTML = ''; 
     
     // 2. Iterar sobre cada reserva encontrada y construir su sección en el formulario.
@@ -2869,7 +2973,8 @@ async function saveAllNewReservations(ui) {
         });
 
         if (response.status === 'ok') {
-            showStatus(ui, response.message, 'success');
+            const successMessage = getGiavAwareSaveSuccessMessage(response.message);
+            showStatus(ui, successMessage || response.message, 'success');
             
             ui.saveAllBtn.style.display = 'none';
             ui.discardBtn.style.display = 'none';
@@ -3186,6 +3291,182 @@ function shouldHideFieldInCaptureUI(fieldName, fieldMeta = null) {
     return shouldHideFieldInUI(fieldName, fieldMeta);
 }
 
+let activeCustomSelectState = null;
+
+function closeActiveCustomSelectDropdown() {
+    if (!activeCustomSelectState) return;
+    const { menu, cleanup } = activeCustomSelectState;
+    cleanup.forEach(fn => {
+        try { fn(); } catch (_) { /* noop */ }
+    });
+    if (menu && menu.parentNode) {
+        menu.parentNode.removeChild(menu);
+    }
+    activeCustomSelectState = null;
+}
+
+function enhanceSelectWithFixedDropdown(nativeSelect) {
+    if (!(nativeSelect instanceof HTMLSelectElement)) return;
+    if (nativeSelect.dataset.capdataEnhancedDropdown === '1') return;
+    nativeSelect.dataset.capdataEnhancedDropdown = '1';
+
+    const parent = nativeSelect.parentNode;
+    if (!parent) return;
+
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'position:relative;width:100%;';
+    parent.insertBefore(wrapper, nativeSelect);
+    wrapper.appendChild(nativeSelect);
+
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'capdata-select-trigger';
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.style.cssText = 'width:100%;padding:8px 30px 8px 8px;border:1px solid #ccc;border-radius:4px;background-color:#fff;color:#111827;font-size:14px;line-height:1.35;text-align:left;cursor:pointer;position:relative;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    wrapper.appendChild(trigger);
+
+    const labelSpan = document.createElement('span');
+    labelSpan.style.cssText = 'display:block;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    trigger.appendChild(labelSpan);
+
+    const arrow = document.createElement('span');
+    arrow.textContent = '▼';
+    arrow.style.cssText = 'position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:10px;color:#555;pointer-events:none;';
+    trigger.appendChild(arrow);
+
+    nativeSelect.style.cssText = 'position:absolute;opacity:0;pointer-events:none;width:1px;height:1px;left:0;top:0;';
+    nativeSelect.tabIndex = -1;
+
+    const syncLabelFromNative = () => {
+        const selected = nativeSelect.options[nativeSelect.selectedIndex];
+        const text = (selected && selected.textContent ? selected.textContent : '-- Seleccionar --').trim() || '-- Seleccionar --';
+        labelSpan.textContent = text;
+    };
+
+    const markSelectedOption = (item, isSelected) => {
+        item.style.backgroundColor = isSelected ? '#e8f0fe' : '#fff';
+        item.style.color = isSelected ? '#0b57d0' : '#111827';
+        item.style.fontWeight = isSelected ? '600' : '400';
+    };
+
+    const openMenu = () => {
+        if (activeCustomSelectState && activeCustomSelectState.trigger === trigger) {
+            closeActiveCustomSelectDropdown();
+            return;
+        }
+        closeActiveCustomSelectDropdown();
+
+        const menu = document.createElement('div');
+        menu.style.cssText = 'position:fixed;background:#fff;border:1px solid #cfd8e3;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.16);overflow:auto;z-index:2147483647;';
+        menu.setAttribute('role', 'listbox');
+        menu.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+        });
+
+        const optionButtons = [];
+        Array.from(nativeSelect.options).forEach((opt, idx) => {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.textContent = (opt.textContent || '').trim() || '-- Seleccionar --';
+            item.style.cssText = 'display:block;width:100%;padding:8px 10px;border:none;border-bottom:1px solid #f0f3f6;background:#fff;text-align:left;cursor:pointer;font-size:13px;';
+            item.disabled = !!opt.disabled;
+            if (item.disabled) item.style.opacity = '0.5';
+            markSelectedOption(item, idx === nativeSelect.selectedIndex);
+            const applySelection = (event) => {
+                if (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+                if (opt.disabled) return;
+                nativeSelect.value = opt.value;
+                nativeSelect.dispatchEvent(new Event('input', { bubbles: true }));
+                nativeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                syncLabelFromNative();
+                closeActiveCustomSelectDropdown();
+                trigger.focus();
+            };
+            item.addEventListener('mousedown', applySelection);
+            item.addEventListener('click', applySelection);
+            optionButtons.push(item);
+            menu.appendChild(item);
+        });
+
+        document.body.appendChild(menu);
+        trigger.setAttribute('aria-expanded', 'true');
+
+        const positionMenu = () => {
+            if (!document.body.contains(trigger)) {
+                closeActiveCustomSelectDropdown();
+                return;
+            }
+            const rect = trigger.getBoundingClientRect();
+            const menuTop = Math.round(rect.bottom + 4);
+            const maxHeight = Math.max(120, Math.floor(window.innerHeight - menuTop - 8));
+            menu.style.left = `${Math.round(rect.left)}px`;
+            menu.style.top = `${menuTop}px`;
+            menu.style.width = `${Math.round(rect.width)}px`;
+            menu.style.maxHeight = `${maxHeight}px`;
+        };
+
+        const onPointerDown = (event) => {
+            const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+            const clickedInside = path.includes(menu) || path.includes(trigger) || menu.contains(event.target) || trigger.contains(event.target);
+            if (!clickedInside) {
+                closeActiveCustomSelectDropdown();
+            }
+        };
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                closeActiveCustomSelectDropdown();
+                trigger.focus();
+            }
+        };
+        const onViewportChange = () => {
+            if (activeCustomSelectState && activeCustomSelectState.trigger === trigger) {
+                positionMenu();
+            }
+        };
+
+        document.addEventListener('mousedown', onPointerDown, true);
+        document.addEventListener('keydown', onKeyDown, true);
+        window.addEventListener('resize', onViewportChange, true);
+        window.addEventListener('scroll', onViewportChange, true);
+
+        activeCustomSelectState = {
+            trigger,
+            menu,
+            cleanup: [
+                () => document.removeEventListener('mousedown', onPointerDown, true),
+                () => document.removeEventListener('keydown', onKeyDown, true),
+                () => window.removeEventListener('resize', onViewportChange, true),
+                () => window.removeEventListener('scroll', onViewportChange, true),
+                () => trigger.setAttribute('aria-expanded', 'false')
+            ]
+        };
+
+        positionMenu();
+
+        const selectedButton = optionButtons[nativeSelect.selectedIndex];
+        if (selectedButton) {
+            selectedButton.scrollIntoView({ block: 'nearest' });
+        }
+    };
+
+    trigger.addEventListener('click', (event) => {
+        event.preventDefault();
+        openMenu();
+    });
+    trigger.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
+            event.preventDefault();
+            openMenu();
+        }
+    });
+    nativeSelect.addEventListener('change', syncLabelFromNative);
+    syncLabelFromNative();
+}
+
 function createFieldElement(fieldName, value, index, options = {}) {
     const normalizedFieldName = String(fieldName || '').toLowerCase();
     const reservationTypeForRules = options.reservationType || selectedReservationType || 'aereo';
@@ -3226,7 +3507,7 @@ function createFieldElement(fieldName, value, index, options = {}) {
     // Usamos el label que viene del servidor (o el generado por el guesser)
     const label = document.createElement('label');
     label.setAttribute('for', fieldId);
-    label.textContent = fieldMeta.label;
+    label.textContent = getGiavFieldLabelOverride(fieldName, fieldMeta.label);
 
     // --- A) EXCEPCIONES: CAMPOS QUE SE OCULTAN ---
     if (
@@ -3402,12 +3683,13 @@ function createFieldElement(fieldName, value, index, options = {}) {
         options.forEach(opt => {
             const option = document.createElement('option');
             option.value = opt;
-            option.textContent = opt || '-- Seleccionar --';
+            option.textContent = getGiavSelectOptionLabel(fieldName, opt);
             if (String(value).toLowerCase() === String(opt).toLowerCase()) option.selected = true;
             input.appendChild(option);
         });
         group.appendChild(label);
         group.appendChild(input);
+        enhanceSelectWithFixedDropdown(input);
 
     } else if (fieldMeta.type === 'number') {
         input = document.createElement('input');
@@ -3936,6 +4218,7 @@ function showSpinner(ui, show) {
 }
 
 function clearFormDOM(ui) {
+    closeActiveCustomSelectDropdown();
     ui.standardFieldsContainer.innerHTML = '';
     ui.formContainer.style.display = 'none';
     ui.globalActionsRow.style.display = 'none';
