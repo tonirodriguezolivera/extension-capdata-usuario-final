@@ -313,20 +313,8 @@ function isGiavIntegrationActive() {
 function updateGiavContactsVisibility() {
     const contactsTabBtn = document.querySelector('.tab-btn[data-tab="fillContent"]');
     const contactsPane = document.getElementById('fillContent');
-    const captureTabBtn = document.querySelector('.tab-btn[data-tab="captureContent"]');
-    const capturePane = document.getElementById('captureContent');
-    const giavActive = isGiavIntegrationActive();
-
-    if (contactsTabBtn) contactsTabBtn.style.display = giavActive ? 'none' : '';
-    if (contactsPane) contactsPane.style.display = giavActive ? 'none' : '';
-
-    if (giavActive && contactsPane?.classList.contains('active')) {
-        contactsPane.classList.remove('active');
-        contactsTabBtn?.classList.remove('active');
-        if (captureTabBtn) captureTabBtn.classList.add('active');
-        if (capturePane) capturePane.classList.add('active');
-        notifySizeChange();
-    }
+    if (contactsTabBtn) contactsTabBtn.style.display = '';
+    if (contactsPane) contactsPane.style.display = '';
 }
 
 function getGiavAwareSaveSuccessMessage(message) {
