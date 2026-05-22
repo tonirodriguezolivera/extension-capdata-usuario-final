@@ -172,12 +172,12 @@ const GIAV_LABEL_OVERRIDES = {
 const GIAV_SELECT_OPTION_LABELS = {
     accion: {
         solo_captura: 'Solo captura',
-        volcar_expediente: 'Volcar expediente'
+        volcar_expediente: 'Volcar a expediente'
     },
     accion_facturacion: {
         ninguna: 'Ninguna',
-        facturar_cliente: 'Facturar cliente',
-        facturar_pasajeros: 'Facturar pasajeros'
+        facturar_cliente: 'Facturar a cliente',
+        facturar_pasajeros: 'Facturar a pasajeros'
     }
 };
 
