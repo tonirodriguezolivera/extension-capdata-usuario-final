@@ -273,7 +273,8 @@
     <div id="fillContent" class="tab-pane">
         <div id="contactFilterActionRow">
             <input type="text" id="contactFilterInput" placeholder="Filtrar por nombre, email...">
-            <button id="fillWithContactBtn" disabled>Rellenar con Contacto Seleccionado</button>
+            <!-- Botón ocultado temporalmente (no se elimina del DOM para que el JS siga funcionando sin guardas). -->
+            <button id="fillWithContactBtn" disabled style="display:none;">Rellenar con Contacto Seleccionado</button>
         </div>
 
         <div id="contactToolbar">
