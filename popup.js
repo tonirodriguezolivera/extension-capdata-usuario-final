@@ -2905,6 +2905,8 @@ function buildMultiEditableForm(ui, reservationsData) {
 }
 
 async function saveAllNewReservations(ui) {
+    scrollPopupToTop(ui);
+
     const apiKey = ui.apiKeyInput.value.trim();
     if (!apiKey) {
         alert("Por favor, ingresa tu API Key.");
@@ -2936,6 +2938,7 @@ async function saveAllNewReservations(ui) {
             showSpinner(ui, false);
             ui.saveAllBtn.disabled = false;
             showStatus(ui, `⚠️ Hay campos obligatorios de ORBISWEB sin completar en la(s) reserva(s): ${missingNumidsucursal.join(', ')}. Por favor, completa todos los campos requeridos.`, 'error');
+            scrollPopupToTop(ui);
 
             const requiredFields = ['strlocalizadorpnr', 'strlocalizadorgds'];
             missingNumidsucursal.forEach(reservationNum => {
@@ -2977,6 +2980,7 @@ async function saveAllNewReservations(ui) {
         if (response.status === 'ok') {
             const successMessage = getGiavAwareSaveSuccessMessage(response.message);
             showStatus(ui, successMessage || response.message, 'success');
+            scrollPopupToTop(ui);
             
             ui.saveAllBtn.style.display = 'none';
             ui.discardBtn.style.display = 'none';
@@ -2989,15 +2993,35 @@ async function saveAllNewReservations(ui) {
 
         } else {
             showStatus(ui, `Error: ${response.message}`, 'error');
+            scrollPopupToTop(ui);
             ui.saveAllBtn.disabled = false; 
         }
 
     } catch (e) {
         showStatus(ui, `Error de comunicación: ${e.message}`, 'error');
+        scrollPopupToTop(ui);
         ui.saveAllBtn.disabled = false;
     } finally {
         showSpinner(ui, false);
     }
+}
+
+function scrollPopupToTop(ui) {
+    const scrollTargets = [
+        ui?.formContainer,
+        document.scrollingElement,
+        document.documentElement,
+        document.body
+    ];
+
+    scrollTargets.forEach((target) => {
+        if (!target) return;
+        if (typeof target.scrollTo === 'function') {
+            target.scrollTo({ top: 0, behavior: 'auto' });
+        } else {
+            target.scrollTop = 0;
+        }
+    });
 }
 
 async function buildReservationsToSaveFromForm(savedReservationData, options = {}) {
