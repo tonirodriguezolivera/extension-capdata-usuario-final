@@ -17,6 +17,7 @@
     input[type="number"],
     input[type="date"],
     input[type="time"] { width: calc(100% - 20px); padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    input:disabled, select:disabled, textarea:disabled { background-color: #f3f4f6; color: #6b7280; border-color: #d1d5db; cursor: not-allowed; opacity: 1; }
     select { width: calc(100% - 20px); padding: 8px; border: 1px solid #ccc; border-radius: 4px; background-color: #fff; font-size: 14px; cursor: pointer; appearance: none; -webkit-appearance: none; -moz-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23333' d='M6 9L1 4h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 8px center; padding-right: 30px; }
     select:hover { border-color: #0672ff; }
     select:focus { outline: none; border-color: #0672ff; box-shadow: 0 0 0 2px rgba(6, 114, 255, 0.2); }
@@ -25,7 +26,7 @@
     button:disabled { background-color: #ccc; border-color: #ccc; cursor: not-allowed; }
     #saveApiKeyBtn { background-color: #fff; color: #0672ff; padding: 8px 12px; flex-shrink: 0; white-space: nowrap;}
     #saveApiKeyBtn:hover { background-color: #0672ff; color: #fff; }
-    .status-success { background-color: #e6ffe6; color: #008000; }
+    .status-success { background-color: #e6ffe6; color: #008000; font-size: 15px; }
     .status-error { background-color: #ffe6e6; color: #cc0000; }
     .status-info { background-color: #e6f7ff; color: #0056b3; }
     #statusMessage { padding: 8px; border-radius: 4px; margin-bottom: 10px; text-align: center; }
@@ -108,8 +109,8 @@
     .passenger-list { padding-left: 20px; margin-top: 10px; border-left: 2px solid #eee; }
     .passenger-item { margin-bottom: 5px; font-size: 13px; }
     #globalActionsRow { margin-bottom: 15px; display: flex; justify-content: flex-end; }
-    #clearBtn { background-color: #fff; border-color: #dc3545; color: #dc3545; font-weight: bold; margin-right: 3px;}
-    #clearBtn:hover { background-color: #c82333; border-color: #c82333; color: #fff;}
+    #clearBtn { background-color: #fff; border-color: #0672ff; color: #0672ff; font-weight: bold; margin-right: 3px;}
+    #clearBtn:hover { background-color: #0059cc; border-color: #0059cc; color: #fff;}
 
     /* --- ESTILOS PESTAÑA CONTACTOS --- */
     #contactToolbar { margin-bottom: 10px; }
@@ -329,8 +330,8 @@
       </div>
       <div id="globalActionsRow" style="display: none; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
         <button id="saveAllBtn" title="Guardar todas las reservas nuevas. Esta acción consumirá 1 token." style="background-color: #28a745; border-color: #28a745; flex-grow: 1;">✅ Guardar</button>
-        <button id="discardBtn" title="Descartar resultados y empezar de nuevo" style="background-color: #dc3545; border-color: #dc3545; flex-grow: 1;">❌ Descartar</button>
-        <button id="clearBtn" title="Limpiar la vista para una nueva captura" style="display: none;">🧹 Limpiar Captura</button>
+        <button id="discardBtn" title="Descartar resultados y empezar de nuevo" style="background-color: #0672ff; border-color: #0672ff; flex-grow: 1;">❌ Descartar</button>
+        <button id="clearBtn" title="Limpiar la vista para una nueva captura" style="display: none;">🧹 Iniciar nueva captura</button>
       </div>
       <div id="formContainer" style="display: none;">
         <div id="standardFieldsContainer"></div>

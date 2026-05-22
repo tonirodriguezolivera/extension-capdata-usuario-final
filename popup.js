@@ -2981,6 +2981,7 @@ async function saveAllNewReservations(ui) {
             const successMessage = getGiavAwareSaveSuccessMessage(response.message);
             showStatus(ui, successMessage || response.message, 'success');
             scrollPopupToTop(ui);
+            lockCapturedFormFields(ui);
             
             ui.saveAllBtn.style.display = 'none';
             ui.discardBtn.style.display = 'none';
@@ -3022,6 +3023,16 @@ function scrollPopupToTop(ui) {
             target.scrollTop = 0;
         }
     });
+}
+
+function lockCapturedFormFields(ui) {
+    if (!ui?.standardFieldsContainer) return;
+
+    ui.standardFieldsContainer
+        .querySelectorAll('input, select, textarea')
+        .forEach((field) => {
+            field.disabled = true;
+        });
 }
 
 async function buildReservationsToSaveFromForm(savedReservationData, options = {}) {
