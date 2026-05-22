@@ -25,10 +25,12 @@ let currentFolderId = null; // null = Raíz
 let currentFolderName = 'Inicio';
 let _airlinesIataCache = null;
 const CAPTURE_HIDE_EMPTY_RULES_KEY = 'captureHideWhenEmptyRules';
+const CAPTURE_VIEW_STATE_KEY = 'captureViewState';
 const STANDARD_FIELD_VISIBILITY_REFRESH_KEY = 'standardFieldVisibilityRefreshTs';
 const INTEGRATION_FIELD_VISIBILITY_REFRESH_KEY = 'integrationFieldVisibilityRefreshTs';
 let captureHideWhenEmptyRules = {};
 let currentCaptureDomain = '';
+let isLastCaptureSavedLocked = false;
 
 async function loadStandardFieldVisibilityForPopup(apiKey) {
     try {
@@ -1536,7 +1538,14 @@ async function initializeCaptureTab(ui) {
     }
 
     // 5. CARGAR ÚLTIMA RESERVA DESDE EL STORAGE
-    const { savedReservationData } = await chrome.storage.local.get('savedReservationData');
+    const initStorage = await chrome.storage.local.get(['savedReservationData', CAPTURE_VIEW_STATE_KEY]);
+    const savedReservationData = initStorage.savedReservationData;
+    const captureViewState = initStorage[CAPTURE_VIEW_STATE_KEY];
+    isLastCaptureSavedLocked = !!(captureViewState && captureViewState.mode === 'saved_locked');
+    if (!savedReservationData && isLastCaptureSavedLocked) {
+        isLastCaptureSavedLocked = false;
+        await chrome.storage.local.remove(CAPTURE_VIEW_STATE_KEY);
+    }
     
     if (savedReservationData) {
         // Restablecer el tipo de reserva desde los datos guardados
@@ -1579,7 +1588,7 @@ async function initializeCaptureTab(ui) {
             }
             
             // Preparar mensajes de estado
-            const messages = ['Mostrando última reserva capturada.'];
+            const messages = [isLastCaptureSavedLocked ? 'Mostrando última reserva guardada.' : 'Mostrando última reserva capturada.'];
             const hasActiveIntegrations = avsisResult.active || gesinturResult.active || orbiswebResult.active;
             
             if (avsisResult.message) messages.push(avsisResult.message);
@@ -1588,7 +1597,7 @@ async function initializeCaptureTab(ui) {
             
             showStatus(ui, messages.join(' '), hasActiveIntegrations ? 'success' : 'info');
         } else {
-            showStatus(ui, 'Mostrando última reserva capturada.', 'info');
+            showStatus(ui, isLastCaptureSavedLocked ? 'Mostrando última reserva guardada.' : 'Mostrando última reserva capturada.', 'info');
         }
 
         // --- DIBUJAR FORMULARIO (Ahora usará ALL_SERVICE_FIELDS y CUSTOM_SCHEMA internamente) ---
@@ -2230,7 +2239,8 @@ async function captureReservation(ui) {
 }
 
 async function clearStateAndForm(ui, showInitialMessage = true) {
-    await chrome.storage.local.remove('savedReservationData');
+    await chrome.storage.local.remove(['savedReservationData', CAPTURE_VIEW_STATE_KEY]);
+    isLastCaptureSavedLocked = false;
     clearFormDOM(ui);
     ui.capturarReservaBtn.style.display = 'block';
     ui.globalActionsRow.style.display = 'none';
@@ -2898,6 +2908,12 @@ function buildMultiEditableForm(ui, reservationsData) {
     ui.saveAllBtn.style.display = 'inline-block';
     ui.discardBtn.style.display = 'inline-block';
     ui.saveAllBtn.disabled = false;
+    if (isLastCaptureSavedLocked) {
+        lockCapturedFormFields(ui);
+        ui.saveAllBtn.style.display = 'none';
+        ui.discardBtn.style.display = 'none';
+        ui.clearBtn.style.display = 'inline-block';
+    }
 
     if (typeof notifySizeChange === 'function') {
         notifySizeChange();
@@ -2981,6 +2997,13 @@ async function saveAllNewReservations(ui) {
             const successMessage = getGiavAwareSaveSuccessMessage(response.message);
             showStatus(ui, successMessage || response.message, 'success');
             scrollPopupToTop(ui);
+            isLastCaptureSavedLocked = true;
+            await chrome.storage.local.set({
+                [CAPTURE_VIEW_STATE_KEY]: {
+                    mode: 'saved_locked',
+                    updatedAt: Date.now()
+                }
+            });
             lockCapturedFormFields(ui);
             
             ui.saveAllBtn.style.display = 'none';
