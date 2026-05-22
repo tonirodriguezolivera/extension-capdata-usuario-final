@@ -2972,7 +2972,14 @@ async function saveAllNewReservations(ui) {
             return;
         }
         const reservationsToSave = prep.reservationsToSave;
-        await applyOrbisExpedienteCreationChoice(reservationsToSave);
+        const expedienteChoice = await applyOrbisExpedienteCreationChoice(reservationsToSave);
+        if (expedienteChoice && expedienteChoice.aborted) {
+            showSpinner(ui, false);
+            ui.saveAllBtn.disabled = false;
+            showStatus(ui, 'Guardado cancelado. Vuelve a pulsar "Guardar todo" cuando estés listo.', 'warning');
+            scrollPopupToTop(ui);
+            return;
+        }
 
         // Log detallado de lo que se va a enviar al backend (estructura y datos)
         const customSlugs = Array.isArray(window.CUSTOM_SCHEMA) ? window.CUSTOM_SCHEMA.map(cf => cf?.slug).filter(Boolean) : [];
@@ -3096,6 +3103,11 @@ async function applyOrbisExpedienteCreationChoice(reservationsToSave) {
         cancelText: 'No crear'
     });
 
+    // null = el usuario cerró el popup (X / overlay / Escape) sin decidir → abortar guardado.
+    if (createExpediente === null) {
+        return { aborted: true };
+    }
+
     missingExpedienteIndexes.forEach((idx) => {
         const reservation = reservationsToSave[idx] || {};
         const nextAccion = createExpediente ? 'volcar_expediente' : 'solo_captura';
@@ -3107,19 +3119,32 @@ async function applyOrbisExpedienteCreationChoice(reservationsToSave) {
         reservation.reservation_automation = automation;
         reservationsToSave[idx] = reservation;
     });
+    return { aborted: false };
 }
 
 function showCompactChoiceModal({ title, message, confirmText = 'Aceptar', cancelText = 'Cancelar' }) {
+    // Valores devueltos:
+    //   true  -> botón confirmar (decisión explícita)
+    //   false -> botón cancelar  (decisión explícita)
+    //   null  -> cerrado con la X o clic fuera (abortar, no decidió)
     return new Promise((resolve) => {
         const overlay = document.createElement('div');
         overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.45);display:flex;align-items:center;justify-content:center;z-index:10050;padding:12px;';
 
         const modal = document.createElement('div');
-        modal.style.cssText = 'width:min(420px,95vw);background:#fff;border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,0.2);padding:14px 14px 12px 14px;font-family:Arial,sans-serif;';
+        modal.style.cssText = 'position:relative;width:min(420px,95vw);background:#fff;border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,0.2);padding:14px 14px 12px 14px;font-family:Arial,sans-serif;';
+
+        const closeX = document.createElement('button');
+        closeX.type = 'button';
+        closeX.setAttribute('aria-label', 'Cerrar');
+        closeX.innerHTML = '&times;';
+        closeX.style.cssText = 'position:absolute;top:6px;right:8px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;background:transparent;border:none;color:#6b7280;font-size:20px;line-height:1;cursor:pointer;padding:0;border-radius:4px;';
+        closeX.addEventListener('mouseover', () => { closeX.style.background = '#f3f4f6'; closeX.style.color = '#111827'; });
+        closeX.addEventListener('mouseout', () => { closeX.style.background = 'transparent'; closeX.style.color = '#6b7280'; });
 
         const h = document.createElement('div');
         h.textContent = title || 'Confirmación';
-        h.style.cssText = 'font-size:15px;font-weight:700;color:#111827;margin-bottom:8px;';
+        h.style.cssText = 'font-size:15px;font-weight:700;color:#111827;margin-bottom:8px;padding-right:24px;';
 
         const p = document.createElement('div');
         p.textContent = message || '';
@@ -3138,19 +3163,29 @@ function showCompactChoiceModal({ title, message, confirmText = 'Aceptar', cance
         okBtn.textContent = confirmText;
         okBtn.style.cssText = 'border:none;background:#2563eb;color:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:600;';
 
-        const closeAndResolve = (value) => {
-            overlay.remove();
-            resolve(!!value);
+        const onKeyDown = (evt) => {
+            if (evt.key === 'Escape') {
+                evt.preventDefault();
+                closeAndResolve(null);
+            }
         };
+        const closeAndResolve = (value) => {
+            document.removeEventListener('keydown', onKeyDown, true);
+            overlay.remove();
+            resolve(value);
+        };
+        document.addEventListener('keydown', onKeyDown, true);
 
+        closeX.addEventListener('click', () => closeAndResolve(null));
         cancelBtn.addEventListener('click', () => closeAndResolve(false));
         okBtn.addEventListener('click', () => closeAndResolve(true));
         overlay.addEventListener('click', (evt) => {
-            if (evt.target === overlay) closeAndResolve(false);
+            if (evt.target === overlay) closeAndResolve(null);
         });
 
         actions.appendChild(cancelBtn);
         actions.appendChild(okBtn);
+        modal.appendChild(closeX);
         modal.appendChild(h);
         modal.appendChild(p);
         modal.appendChild(actions);
@@ -3220,7 +3255,8 @@ function showOrbisProviderRetryModal({
     skipLabel = 'Enviar sin proveedor',
     cancelLabel = 'Cancelar',
     previousErrorMessage = '',
-    createdNumIdExpediente = null
+    createdNumIdExpediente = null,
+    savedNote = ''
 } = {}) {
     return new Promise((resolve) => {
         const overlay = document.createElement('div');
@@ -3236,8 +3272,8 @@ function showOrbisProviderRetryModal({
 
         if (createdNumIdExpediente != null) {
             const expInfo = document.createElement('div');
-            expInfo.textContent = `Expediente ya creado en Orbis: numIdExpediente ${createdNumIdExpediente}. El reintento NO creará otro, solo enviará la reserva a ese expediente.`;
-            expInfo.style.cssText = 'font-size:12px;line-height:1.4;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px;margin-bottom:10px;font-weight:600;';
+            expInfo.textContent = `Expediente ya creado en Orbis: numIdExpediente ${createdNumIdExpediente}.`;
+            expInfo.style.cssText = 'font-size:14px;line-height:1.4;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;margin-bottom:10px;font-weight:700;';
             modal.appendChild(expInfo);
         }
 
@@ -3260,17 +3296,29 @@ function showOrbisProviderRetryModal({
         label.style.cssText = 'display:block;font-size:12px;font-weight:600;color:#111827;margin-bottom:4px;';
         modal.appendChild(label);
 
+        // Fila input + botón principal (input 3/4, botón 1/4)
+        const inputRow = document.createElement('div');
+        inputRow.style.cssText = 'display:flex;gap:8px;align-items:stretch;margin-bottom:4px;';
+
         const input = document.createElement('input');
         input.type = 'number';
         input.min = '1';
         input.step = '1';
         input.inputMode = 'numeric';
         input.placeholder = 'Ej. 13';
-        input.style.cssText = 'width:100%;box-sizing:border-box;border:1px solid #d1d5db;border-radius:8px;padding:8px 10px;font-size:13px;color:#111827;margin-bottom:4px;';
+        input.style.cssText = 'flex:3;min-width:0;box-sizing:border-box;border:1px solid #d1d5db;border-radius:8px;padding:8px 10px;font-size:13px;color:#111827;';
         if (attemptedProviderId != null) {
             input.value = String(attemptedProviderId);
         }
-        modal.appendChild(input);
+        inputRow.appendChild(input);
+
+        const okBtn = document.createElement('button');
+        okBtn.type = 'button';
+        okBtn.textContent = submitLabel;
+        okBtn.style.cssText = 'flex:1;min-width:0;border:none;background:#2563eb;color:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:600;text-align:center;line-height:1.2;white-space:normal;word-break:break-word;';
+        inputRow.appendChild(okBtn);
+
+        modal.appendChild(inputRow);
 
         const helper = document.createElement('div');
         helper.textContent = attemptedProviderId
@@ -3283,13 +3331,15 @@ function showOrbisProviderRetryModal({
         errorBox.style.cssText = 'display:none;font-size:12px;color:#b91c1c;margin-bottom:8px;';
         modal.appendChild(errorBox);
 
+        if (savedNote) {
+            const savedNoteBox = document.createElement('div');
+            savedNoteBox.textContent = savedNote;
+            savedNoteBox.style.cssText = 'font-size:12px;line-height:1.4;color:#374151;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin-bottom:10px;';
+            modal.appendChild(savedNoteBox);
+        }
+
         const actions = document.createElement('div');
         actions.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;';
-
-        const cancelBtn = document.createElement('button');
-        cancelBtn.type = 'button';
-        cancelBtn.textContent = cancelLabel;
-        cancelBtn.style.cssText = 'border:1px solid #d1d5db;background:#fff;color:#111827;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;';
 
         const skipBtn = document.createElement('button');
         skipBtn.type = 'button';
@@ -3297,22 +3347,23 @@ function showOrbisProviderRetryModal({
         skipBtn.style.cssText = 'border:1px solid #f59e0b;background:#fffbeb;color:#92400e;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:600;';
         if (!allowSkip) skipBtn.style.display = 'none';
 
-        const okBtn = document.createElement('button');
-        okBtn.type = 'button';
-        okBtn.textContent = submitLabel;
-        okBtn.style.cssText = 'border:none;background:#2563eb;color:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:600;';
-
-        actions.appendChild(cancelBtn);
         if (allowSkip) actions.appendChild(skipBtn);
-        actions.appendChild(okBtn);
         modal.appendChild(actions);
 
+        // Cancelación: clic fuera del modal (overlay) o tecla Escape.
+        const onKeyDown = (evt) => {
+            if (evt.key === 'Escape') {
+                evt.preventDefault();
+                close({ action: 'cancel' });
+            }
+        };
         const close = (value) => {
+            document.removeEventListener('keydown', onKeyDown, true);
             overlay.remove();
             resolve(value);
         };
+        document.addEventListener('keydown', onKeyDown, true);
 
-        cancelBtn.addEventListener('click', () => close({ action: 'cancel' }));
         skipBtn.addEventListener('click', () => close({ action: 'retry-without-provider' }));
         okBtn.addEventListener('click', () => {
             const raw = String(input.value || '').trim();
@@ -3444,26 +3495,40 @@ async function showFriendlyOrbisErrorModal(responseOrMessage, context = {}) {
 
     if (canOfferRetry) {
         const providerSuffix = attemptedProviderId ? ` (numIdProveedor intentado: ${attemptedProviderId})` : '';
-        const baseMessage = expedienteAttempted
-            ? `No se pudo crear el expediente en ORBISWEB${providerSuffix}.\n\n`
+        // Distinguimos 3 escenarios para que la UI sea coherente:
+        // 1) Quisimos crear expediente y SE CREÓ, pero Orbis rechazó el proveedor
+        //    de la línea de reserva  → el problema es el proveedor, no el expediente.
+        // 2) Quisimos crear expediente pero NO se creó (no tenemos numIdExpediente).
+        // 3) No quisimos crear expediente; falló el envío de la captura.
+        const expedienteAlreadyCreated = expedienteAttempted && createdNumIdExpediente != null;
+        let retryTitle;
+        let baseMessage;
+        let retryWithProviderLabel;
+        let skipLabel;
+        if (expedienteAlreadyCreated) {
+            retryTitle = 'Falta código de proveedor en Orbis';
+            baseMessage = `Orbis rechazó el proveedor${providerSuffix}, por eso la reserva no se envió a ese expediente.\n\n`
+                + 'Introduce un numIdProveedor válido para enviar la reserva a ese expediente, '
+                + 'o envíala sin proveedor.';
+            retryWithProviderLabel = 'Enviar con este proveedor';
+            skipLabel = 'Enviar sin proveedor';
+        } else if (expedienteAttempted) {
+            retryTitle = 'No se pudo crear el expediente en Orbis';
+            baseMessage = `No se pudo crear el expediente en ORBISWEB${providerSuffix}.\n\n`
                 + 'Introduce el ID correcto del proveedor en Orbis y reintentamos creando el expediente. '
-                + 'También puedes crear el expediente sin proveedor.'
-                + (savedNote ? `\n\n${savedNote}` : '')
-            : `ORBISWEB rechazó el envío${providerSuffix}.\n\n`
+                + 'También puedes crear el expediente sin proveedor.';
+            retryWithProviderLabel = 'Reintentar y crear expediente';
+            // En el flujo expediente, el skip significa "crear expediente SIN proveedor"
+            // (el usuario ya decidió que quiere expediente, así que no se omite).
+            skipLabel = 'Crear expediente sin proveedor';
+        } else {
+            retryTitle = 'No se envió la reserva a Orbis';
+            baseMessage = `ORBISWEB rechazó el envío${providerSuffix}.\n\n`
                 + 'Si conoces el ID correcto del proveedor en Orbis, introdúcelo abajo y reintentamos. '
-                + 'También puedes enviar la reserva sin proveedor.'
-                + (savedNote ? `\n\n${savedNote}` : '');
-        const retryTitle = expedienteAttempted
-            ? 'No se pudo crear el expediente en Orbis'
-            : 'No se envió la reserva a Orbis';
-        const retryWithProviderLabel = expedienteAttempted
-            ? 'Reintentar y crear expediente'
-            : 'Reintentar con este proveedor';
-        // En el flujo expediente, el skip significa "crear expediente SIN proveedor"
-        // (el usuario ya decidió que quiere expediente, así que no se omite).
-        const skipLabel = expedienteAttempted
-            ? 'Crear expediente sin proveedor'
-            : 'Enviar sin proveedor';
+                + 'También puedes enviar la reserva sin proveedor.';
+            retryWithProviderLabel = 'Reintentar con este proveedor';
+            skipLabel = 'Enviar sin proveedor';
+        }
 
         let employeeToken = null;
         try {
@@ -3484,6 +3549,7 @@ async function showFriendlyOrbisErrorModal(responseOrMessage, context = {}) {
                 skipLabel,
                 previousErrorMessage,
                 createdNumIdExpediente,
+                savedNote: savedNote || '',
             });
             if (!choice || choice.action === 'cancel') {
                 lastOutcome = HANDLED_CANCELLED;
