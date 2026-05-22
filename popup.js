@@ -2972,6 +2972,7 @@ async function saveAllNewReservations(ui) {
             return;
         }
         const reservationsToSave = prep.reservationsToSave;
+        await applyOrbisExpedienteCreationChoice(reservationsToSave);
 
         // Log detallado de lo que se va a enviar al backend (estructura y datos)
         const customSlugs = Array.isArray(window.CUSTOM_SCHEMA) ? window.CUSTOM_SCHEMA.map(cf => cf?.slug).filter(Boolean) : [];
@@ -2994,31 +2995,54 @@ async function saveAllNewReservations(ui) {
         });
 
         if (response.status === 'ok') {
-            const successMessage = getGiavAwareSaveSuccessMessage(response.message);
-            showStatus(ui, successMessage || response.message, 'success');
+            const isAllOmitted = !!response.all_omitted
+                || (response.reservations_saved === 0
+                    && response.reservations_omitted > 0);
+            if (isAllOmitted) {
+                const omittedMsg = response.reservations_omitted === 1
+                    ? 'Reserva omitida: ya existe en CapData.'
+                    : `${response.reservations_omitted} reservas omitidas: ya existen en CapData.`;
+                showStatus(ui, omittedMsg, 'warning');
+            } else {
+                const successMessage = getGiavAwareSaveSuccessMessage(response.message);
+                showStatus(ui, successMessage || response.message, 'success');
+            }
             scrollPopupToTop(ui);
-            isLastCaptureSavedLocked = true;
-            await chrome.storage.local.set({
-                [CAPTURE_VIEW_STATE_KEY]: {
-                    mode: 'saved_locked',
-                    updatedAt: Date.now()
-                }
-            });
-            lockCapturedFormFields(ui);
-            
-            ui.saveAllBtn.style.display = 'none';
-            ui.discardBtn.style.display = 'none';
-            ui.clearBtn.style.display = 'inline-block';
-
-            document.querySelectorAll('.view-payload-btn').forEach(btn => {
-                btn.disabled = false;
-                btn.title = "Ver todos los campos que se enviarán al backend";
-            });
+            await applySavedLockedState(ui);
 
         } else {
-            showStatus(ui, `Error: ${response.message}`, 'error');
+            const friendlyResult = await showFriendlyOrbisErrorModal(response, { ui, apiKey });
+            if (!friendlyResult || friendlyResult.handled !== true) {
+                showStatus(ui, `Error: ${response.message}`, 'error');
+            } else if (friendlyResult.outcome === 'cancelled') {
+                showStatus(
+                    ui,
+                    'Envío a ORBISWEB cancelado. La reserva está guardada en CapData.',
+                    'warning'
+                );
+            } else if (friendlyResult.outcome === 'retry_failed') {
+                showStatus(
+                    ui,
+                    'El reintento a ORBISWEB falló. La reserva sigue guardada en CapData.',
+                    'warning'
+                );
+            } else if (friendlyResult.outcome === 'info_only') {
+                showStatus(
+                    ui,
+                    'Aviso de ORBISWEB. La reserva está guardada en CapData; revisa la integración.',
+                    'warning'
+                );
+            } else if (friendlyResult.outcome === 'retry_succeeded') {
+                // El modal ya pintó "Reserva reenviada correctamente a ORBISWEB" en verde.
+                // La reserva está completamente guardada (CapData + Orbis), así que
+                // dejamos la UI en el mismo estado final que el guardado directo:
+                // formularios bloqueados y botón "Iniciar nueva captura" visible.
+                await applySavedLockedState(ui);
+            }
             scrollPopupToTop(ui);
-            ui.saveAllBtn.disabled = false; 
+            if (!friendlyResult || friendlyResult.outcome !== 'retry_succeeded') {
+                ui.saveAllBtn.disabled = false;
+            }
         }
 
     } catch (e) {
@@ -3028,6 +3052,563 @@ async function saveAllNewReservations(ui) {
     } finally {
         showSpinner(ui, false);
     }
+}
+
+function hasOrbisExpedienteValue(reservation) {
+    if (!reservation || typeof reservation !== 'object') return false;
+    const automation = (reservation.reservation_automation && typeof reservation.reservation_automation === 'object')
+        ? reservation.reservation_automation
+        : {};
+    const candidates = [
+        reservation.numIdExpediente,
+        reservation.num_id_expediente,
+        reservation.id_expediente,
+        reservation.expediente_id,
+        reservation.codigo_expediente,
+        reservation.expediente,
+        automation.numIdExpediente,
+        automation.codigo_expediente
+    ];
+    return candidates.some(v => v !== null && v !== undefined && String(v).trim() !== '');
+}
+
+async function applyOrbisExpedienteCreationChoice(reservationsToSave) {
+    if (!cachedOrbiswebStatus || cachedIntegrationVisibility.orbisweb === false) return;
+    if (!Array.isArray(reservationsToSave) || reservationsToSave.length === 0) return;
+
+    const missingExpedienteIndexes = [];
+    reservationsToSave.forEach((reservation, idx) => {
+        if (!hasOrbisExpedienteValue(reservation)) {
+            missingExpedienteIndexes.push(idx);
+        }
+    });
+
+    if (missingExpedienteIndexes.length === 0) return;
+
+    const askTitle = 'Crear expediente en Orbis Web';
+    const askMessage = missingExpedienteIndexes.length === 1
+        ? 'La reserva no tiene expediente. ¿Deseas crear un expediente nuevo en Orbis Web al guardar?'
+        : `Hay ${missingExpedienteIndexes.length} reservas sin expediente. ¿Deseas crear expediente nuevo en Orbis Web para ellas al guardar?`;
+    const createExpediente = await showCompactChoiceModal({
+        title: askTitle,
+        message: askMessage,
+        confirmText: 'Sí, crear',
+        cancelText: 'No crear'
+    });
+
+    missingExpedienteIndexes.forEach((idx) => {
+        const reservation = reservationsToSave[idx] || {};
+        const nextAccion = createExpediente ? 'volcar_expediente' : 'solo_captura';
+        reservation.accion = nextAccion;
+        const automation = (reservation.reservation_automation && typeof reservation.reservation_automation === 'object')
+            ? { ...reservation.reservation_automation }
+            : {};
+        automation.accion = nextAccion;
+        reservation.reservation_automation = automation;
+        reservationsToSave[idx] = reservation;
+    });
+}
+
+function showCompactChoiceModal({ title, message, confirmText = 'Aceptar', cancelText = 'Cancelar' }) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.45);display:flex;align-items:center;justify-content:center;z-index:10050;padding:12px;';
+
+        const modal = document.createElement('div');
+        modal.style.cssText = 'width:min(420px,95vw);background:#fff;border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,0.2);padding:14px 14px 12px 14px;font-family:Arial,sans-serif;';
+
+        const h = document.createElement('div');
+        h.textContent = title || 'Confirmación';
+        h.style.cssText = 'font-size:15px;font-weight:700;color:#111827;margin-bottom:8px;';
+
+        const p = document.createElement('div');
+        p.textContent = message || '';
+        p.style.cssText = 'font-size:13px;line-height:1.4;color:#374151;margin-bottom:12px;';
+
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.textContent = cancelText;
+        cancelBtn.style.cssText = 'border:1px solid #d1d5db;background:#fff;color:#111827;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;';
+
+        const okBtn = document.createElement('button');
+        okBtn.type = 'button';
+        okBtn.textContent = confirmText;
+        okBtn.style.cssText = 'border:none;background:#2563eb;color:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:600;';
+
+        const closeAndResolve = (value) => {
+            overlay.remove();
+            resolve(!!value);
+        };
+
+        cancelBtn.addEventListener('click', () => closeAndResolve(false));
+        okBtn.addEventListener('click', () => closeAndResolve(true));
+        overlay.addEventListener('click', (evt) => {
+            if (evt.target === overlay) closeAndResolve(false);
+        });
+
+        actions.appendChild(cancelBtn);
+        actions.appendChild(okBtn);
+        modal.appendChild(h);
+        modal.appendChild(p);
+        modal.appendChild(actions);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+    });
+}
+
+function showCompactInfoModal({ title, message, hints = [] }) {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.45);display:flex;align-items:center;justify-content:center;z-index:10051;padding:12px;';
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'width:min(500px,95vw);background:#fff;border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,0.2);padding:14px;font-family:Arial,sans-serif;';
+
+    const h = document.createElement('div');
+    h.textContent = title || 'Información';
+    h.style.cssText = 'font-size:15px;font-weight:700;color:#111827;margin-bottom:8px;';
+
+    const p = document.createElement('div');
+    p.textContent = message || '';
+    p.style.cssText = 'font-size:13px;line-height:1.4;color:#374151;margin-bottom:10px;white-space:pre-wrap;';
+    modal.appendChild(h);
+    modal.appendChild(p);
+
+    if (Array.isArray(hints) && hints.length > 0) {
+        const tipsTitle = document.createElement('div');
+        tipsTitle.textContent = 'Qué puedes hacer ahora:';
+        tipsTitle.style.cssText = 'font-size:12px;font-weight:700;color:#111827;margin-bottom:6px;';
+        modal.appendChild(tipsTitle);
+
+        const ul = document.createElement('ul');
+        ul.style.cssText = 'margin:0 0 12px 18px;padding:0;color:#374151;font-size:12px;line-height:1.45;';
+        hints.forEach((hint) => {
+            const li = document.createElement('li');
+            li.textContent = hint;
+            ul.appendChild(li);
+        });
+        modal.appendChild(ul);
+    }
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;justify-content:flex-end;';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.textContent = 'Entendido';
+    closeBtn.style.cssText = 'border:none;background:#2563eb;color:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:600;';
+    actions.appendChild(closeBtn);
+    modal.appendChild(actions);
+
+    const closeModal = () => overlay.remove();
+    closeBtn.addEventListener('click', closeModal);
+    overlay.addEventListener('click', (evt) => {
+        if (evt.target === overlay) closeModal();
+    });
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+}
+
+function showOrbisProviderRetryModal({
+    title = 'Reintentar envío a Orbis',
+    message = '',
+    attemptedProviderId = null,
+    allowSkip = true,
+    submitLabel = 'Reintentar con este proveedor',
+    skipLabel = 'Enviar sin proveedor',
+    cancelLabel = 'Cancelar',
+    previousErrorMessage = '',
+    createdNumIdExpediente = null
+} = {}) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.45);display:flex;align-items:center;justify-content:center;z-index:10052;padding:12px;';
+
+        const modal = document.createElement('div');
+        modal.style.cssText = 'width:min(460px,95vw);background:#fff;border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,0.2);padding:16px;font-family:Arial,sans-serif;';
+
+        const h = document.createElement('div');
+        h.textContent = title;
+        h.style.cssText = 'font-size:15px;font-weight:700;color:#111827;margin-bottom:8px;';
+        modal.appendChild(h);
+
+        if (createdNumIdExpediente != null) {
+            const expInfo = document.createElement('div');
+            expInfo.textContent = `Expediente ya creado en Orbis: numIdExpediente ${createdNumIdExpediente}. El reintento NO creará otro, solo enviará la reserva a ese expediente.`;
+            expInfo.style.cssText = 'font-size:12px;line-height:1.4;color:#1e40af;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px;margin-bottom:10px;font-weight:600;';
+            modal.appendChild(expInfo);
+        }
+
+        if (previousErrorMessage) {
+            const lastError = document.createElement('div');
+            lastError.textContent = `Último intento: ${previousErrorMessage}`;
+            lastError.style.cssText = 'font-size:12px;line-height:1.4;color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px;margin-bottom:10px;white-space:pre-wrap;';
+            modal.appendChild(lastError);
+        }
+
+        if (message) {
+            const p = document.createElement('div');
+            p.textContent = message;
+            p.style.cssText = 'font-size:13px;line-height:1.4;color:#374151;margin-bottom:12px;white-space:pre-wrap;';
+            modal.appendChild(p);
+        }
+
+        const label = document.createElement('label');
+        label.textContent = 'numIdProveedor de Orbis';
+        label.style.cssText = 'display:block;font-size:12px;font-weight:600;color:#111827;margin-bottom:4px;';
+        modal.appendChild(label);
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '1';
+        input.step = '1';
+        input.inputMode = 'numeric';
+        input.placeholder = 'Ej. 13';
+        input.style.cssText = 'width:100%;box-sizing:border-box;border:1px solid #d1d5db;border-radius:8px;padding:8px 10px;font-size:13px;color:#111827;margin-bottom:4px;';
+        if (attemptedProviderId != null) {
+            input.value = String(attemptedProviderId);
+        }
+        modal.appendChild(input);
+
+        const helper = document.createElement('div');
+        helper.textContent = attemptedProviderId
+            ? `Se intentó con numIdProveedor=${attemptedProviderId}. Cambia el valor y reintenta.`
+            : 'Introduce el ID numérico exacto del proveedor en Orbis y reintenta.';
+        helper.style.cssText = 'font-size:11px;color:#6b7280;margin-bottom:12px;';
+        modal.appendChild(helper);
+
+        const errorBox = document.createElement('div');
+        errorBox.style.cssText = 'display:none;font-size:12px;color:#b91c1c;margin-bottom:8px;';
+        modal.appendChild(errorBox);
+
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.textContent = cancelLabel;
+        cancelBtn.style.cssText = 'border:1px solid #d1d5db;background:#fff;color:#111827;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;';
+
+        const skipBtn = document.createElement('button');
+        skipBtn.type = 'button';
+        skipBtn.textContent = skipLabel;
+        skipBtn.style.cssText = 'border:1px solid #f59e0b;background:#fffbeb;color:#92400e;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:600;';
+        if (!allowSkip) skipBtn.style.display = 'none';
+
+        const okBtn = document.createElement('button');
+        okBtn.type = 'button';
+        okBtn.textContent = submitLabel;
+        okBtn.style.cssText = 'border:none;background:#2563eb;color:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:600;';
+
+        actions.appendChild(cancelBtn);
+        if (allowSkip) actions.appendChild(skipBtn);
+        actions.appendChild(okBtn);
+        modal.appendChild(actions);
+
+        const close = (value) => {
+            overlay.remove();
+            resolve(value);
+        };
+
+        cancelBtn.addEventListener('click', () => close({ action: 'cancel' }));
+        skipBtn.addEventListener('click', () => close({ action: 'retry-without-provider' }));
+        okBtn.addEventListener('click', () => {
+            const raw = String(input.value || '').trim();
+            const asNumber = Number(raw);
+            if (!raw || !Number.isFinite(asNumber) || asNumber <= 0 || !Number.isInteger(asNumber)) {
+                errorBox.textContent = 'Introduce un numIdProveedor numérico válido (entero positivo).';
+                errorBox.style.display = 'block';
+                input.focus();
+                return;
+            }
+            close({ action: 'retry-with-provider', providerId: asNumber });
+        });
+        overlay.addEventListener('click', (evt) => {
+            if (evt.target === overlay) close({ action: 'cancel' });
+        });
+        input.addEventListener('keydown', (evt) => {
+            if (evt.key === 'Enter') {
+                evt.preventDefault();
+                okBtn.click();
+            }
+        });
+
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+        setTimeout(() => input.focus(), 50);
+    });
+}
+
+async function performOrbisRetrySend({ requestLogId, providerId = null, skipProvider = false, createExpediente = false, apiKey, employeeToken = null }) {
+    if (!requestLogId) {
+        return { status: 'error', message: 'Falta request_log_id para reintentar.' };
+    }
+    try {
+        const body = {
+            request_log_id: requestLogId,
+            api_key: apiKey || '',
+        };
+        if (employeeToken) body.employee_token = employeeToken;
+        if (skipProvider) {
+            body.skip_num_id_proveedor = true;
+        } else if (providerId != null) {
+            body.num_id_proveedor = providerId;
+        }
+        if (createExpediente) body.create_expediente = true;
+        const headers = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['X-API-Key'] = apiKey;
+        if (employeeToken) headers['X-Employee-Token'] = employeeToken;
+        const url = `${POPUP_API_BASE_URL}/api/orbis/retry-send`;
+        const tStart = performance.now();
+        console.log('[ORBIS RETRY] -> POST', url, 'body=', { ...body, api_key: body.api_key ? '***' : '' });
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+        });
+        const tFetchDone = performance.now();
+        const rawText = await resp.text();
+        console.log('[ORBIS RETRY] <- HTTP', resp.status, `(${Math.round(tFetchDone - tStart)}ms)`, 'bodyPreview=', rawText.slice(0, 500));
+        let data = null;
+        try { data = rawText ? JSON.parse(rawText) : null; } catch (_) { data = null; }
+        if (!data) {
+            return {
+                status: 'error',
+                message: `Respuesta inválida del servidor (HTTP ${resp.status}). Cuerpo: ${rawText.slice(0, 200) || '(vacío)'}`,
+            };
+        }
+        return data;
+    } catch (e) {
+        console.error('[ORBIS RETRY] EXCEPTION', e);
+        return { status: 'error', message: `Error de red al reintentar: ${e?.message || e}` };
+    }
+}
+
+async function showFriendlyOrbisErrorModal(responseOrMessage, context = {}) {
+    const HANDLED_CANCELLED = { handled: true, outcome: 'cancelled' };
+    const HANDLED_RETRY_OK = { handled: true, outcome: 'retry_succeeded' };
+    const HANDLED_RETRY_FAILED = { handled: true, outcome: 'retry_failed' };
+    const HANDLED_INFO = { handled: true, outcome: 'info_only' };
+
+    let rawMessage = '';
+    let errorCode = '';
+    let orbisErrorText = '';
+    let attemptedProviderId = null;
+    let savedLocally = false;
+    let requestLogId = null;
+    let retrySupported = false;
+    let expedienteAttempted = false;
+
+    let createdNumIdExpediente = null;
+    if (responseOrMessage && typeof responseOrMessage === 'object') {
+        rawMessage = responseOrMessage.message || '';
+        errorCode = responseOrMessage.error_code || '';
+        orbisErrorText = responseOrMessage.orbis_error || '';
+        attemptedProviderId = responseOrMessage.attempted_num_id_proveedor ?? null;
+        savedLocally = !!responseOrMessage.reservation_saved_locally;
+        requestLogId = responseOrMessage.request_log_id ?? null;
+        retrySupported = !!responseOrMessage.orbis_retry_supported;
+        expedienteAttempted = !!responseOrMessage.orbis_create_expediente_attempted;
+        createdNumIdExpediente = responseOrMessage.created_num_id_expediente ?? null;
+    } else {
+        rawMessage = String(responseOrMessage || '');
+    }
+
+    const text = String(rawMessage || '').trim();
+    if (!text && !errorCode) return false;
+
+    const lower = (text + ' ' + (orbisErrorText || '')).toLowerCase();
+    const isOrbisContext = errorCode.startsWith('orbis_')
+        || lower.includes('orbis')
+        || lower.includes('proveedor')
+        || lower.includes('expediente');
+    if (!isOrbisContext) return false;
+
+    const savedNote = savedLocally
+        ? 'La reserva sí se guardó correctamente en CapData; solo falló el envío a ORBISWEB.'
+        : null;
+
+    const ui = context.ui || null;
+    const apiKey = context.apiKey || (ui && ui.apiKeyInput ? ui.apiKeyInput.value.trim() : '');
+
+    const providerErrorCodes = new Set([
+        'orbis_capture_provider_invalid',
+        'orbis_capture_failed',
+        'orbis_expediente_provider_invalid',
+        'orbis_expediente_provider_missing',
+        'orbis_expediente_create_failed',
+    ]);
+    const canOfferRetry = retrySupported && requestLogId && providerErrorCodes.has(errorCode);
+
+    if (canOfferRetry) {
+        const providerSuffix = attemptedProviderId ? ` (numIdProveedor intentado: ${attemptedProviderId})` : '';
+        const baseMessage = expedienteAttempted
+            ? `No se pudo crear el expediente en ORBISWEB${providerSuffix}.\n\n`
+                + 'Introduce el ID correcto del proveedor en Orbis y reintentamos creando el expediente. '
+                + 'También puedes crear el expediente sin proveedor.'
+                + (savedNote ? `\n\n${savedNote}` : '')
+            : `ORBISWEB rechazó el envío${providerSuffix}.\n\n`
+                + 'Si conoces el ID correcto del proveedor en Orbis, introdúcelo abajo y reintentamos. '
+                + 'También puedes enviar la reserva sin proveedor.'
+                + (savedNote ? `\n\n${savedNote}` : '');
+        const retryTitle = expedienteAttempted
+            ? 'No se pudo crear el expediente en Orbis'
+            : 'No se envió la reserva a Orbis';
+        const retryWithProviderLabel = expedienteAttempted
+            ? 'Reintentar y crear expediente'
+            : 'Reintentar con este proveedor';
+        // En el flujo expediente, el skip significa "crear expediente SIN proveedor"
+        // (el usuario ya decidió que quiere expediente, así que no se omite).
+        const skipLabel = expedienteAttempted
+            ? 'Crear expediente sin proveedor'
+            : 'Enviar sin proveedor';
+
+        let employeeToken = null;
+        try {
+            const stored = await chrome.storage.local.get('employeeToken');
+            employeeToken = stored?.employeeToken || null;
+        } catch (_) { employeeToken = null; }
+
+        let lastOutcome = HANDLED_CANCELLED;
+        let previousErrorMessage = '';
+        let keepOpen = true;
+        while (keepOpen) {
+            const choice = await showOrbisProviderRetryModal({
+                title: retryTitle,
+                message: baseMessage,
+                attemptedProviderId,
+                allowSkip: true,
+                submitLabel: retryWithProviderLabel,
+                skipLabel,
+                previousErrorMessage,
+                createdNumIdExpediente,
+            });
+            if (!choice || choice.action === 'cancel') {
+                lastOutcome = HANDLED_CANCELLED;
+                keepOpen = false;
+                break;
+            }
+            const skipProvider = choice.action === 'retry-without-provider';
+            const providerId = choice.action === 'retry-with-provider' ? choice.providerId : null;
+            // Si el usuario quiso crear expediente originalmente, lo seguimos creando
+            // en todos los reintentos (con o sin proveedor).
+            const createExp = expedienteAttempted;
+
+            if (ui) showStatus(ui, 'Reintentando envío a ORBISWEB...', 'info');
+            const retryResp = await performOrbisRetrySend({
+                requestLogId,
+                providerId,
+                skipProvider,
+                createExpediente: createExp,
+                apiKey,
+                employeeToken,
+            });
+            if (retryResp?.status === 'ok') {
+                const expedienteSuffix = retryResp.created_num_id_expediente
+                    ? ` Expediente creado: ${retryResp.created_num_id_expediente}.`
+                    : '';
+                showCompactInfoModal({
+                    title: 'Reenviada a ORBISWEB',
+                    message: skipProvider
+                        ? 'La reserva se reenvió correctamente a ORBISWEB sin proveedor.'
+                        : `La reserva se reenvió correctamente a ORBISWEB con numIdProveedor=${retryResp.used_num_id_proveedor ?? providerId}.${expedienteSuffix}`,
+                    hints: []
+                });
+                if (ui) showStatus(ui, 'Reserva reenviada correctamente a ORBISWEB.', 'success');
+                return HANDLED_RETRY_OK;
+            }
+            attemptedProviderId = retryResp?.attempted_num_id_proveedor ?? providerId ?? attemptedProviderId;
+            if (retryResp?.created_num_id_expediente != null) {
+                createdNumIdExpediente = retryResp.created_num_id_expediente;
+            }
+            previousErrorMessage = retryResp?.message || 'Reintento fallido.';
+            lastOutcome = HANDLED_RETRY_FAILED;
+            // Volvemos al inicio del bucle; el siguiente modal mostrará el error inline
+            // (no abrimos un modal informativo encima para evitar solapar dos modales).
+        }
+        return lastOutcome;
+    }
+
+    if (errorCode === 'orbis_capture_provider_invalid'
+        || (errorCode === '' && savedLocally && (lower.includes('proveedor no existe') || lower.includes('inactivo')))) {
+        const providerSuffix = attemptedProviderId ? ` (numIdProveedor=${attemptedProviderId})` : '';
+        showCompactInfoModal({
+            title: 'No se envió la reserva a Orbis',
+            message: `ORBISWEB rechazó el proveedor${providerSuffix}: no existe o está inactivo.${savedNote ? '\n\n' + savedNote : ''}`,
+            hints: [
+                'Revisa en ORBIS que el proveedor exista y esté activo.',
+                'Valida el mapeo de proveedor en CapData (numIdProveedor correcto).',
+                'Después vuelve a guardar la reserva.'
+            ]
+        });
+        return HANDLED_INFO;
+    }
+
+    if (errorCode === 'orbis_expediente_provider_missing') {
+        showCompactInfoModal({
+            title: 'Falta proveedor de Orbis',
+            message: text || 'La reserva no tiene un numIdProveedor de ORBIS válido para crear expediente.',
+            hints: [
+                'Configura el mapeo de proveedor en CapData (Directorio de proveedores).',
+                'Tras corregirlo, vuelve a guardar la reserva.'
+            ]
+        });
+        return HANDLED_INFO;
+    }
+
+    if (errorCode === 'orbis_expediente_provider_invalid'
+        || (errorCode === '' && (lower.includes('proveedor no existe') || (lower.includes('proveedor') && lower.includes('inactivo'))))) {
+        showCompactInfoModal({
+            title: 'No se pudo crear el expediente en Orbis',
+            message: 'Orbis rechazó el proveedor de la reserva (no existe o está inactivo), por eso no se pudo crear el expediente.',
+            hints: [
+                'Revisa en Orbis que el proveedor esté activo.',
+                'Valida el mapeo de proveedor en CapData (numIdProveedor correcto).',
+                'Como alternativa, guarda sin crear expediente y vincúlalo después manualmente.'
+            ]
+        });
+        return HANDLED_INFO;
+    }
+
+    if (lower.includes('numidsucursal')) {
+        showCompactInfoModal({
+            title: 'Falta configuración de Orbis',
+            message: 'No se pudo enviar por ORBISWEB porque falta numIdSucursal.',
+            hints: [
+                'Configura numIdSucursal en la integración Orbis del cliente.',
+                'Después vuelve a guardar la reserva.'
+            ]
+        });
+        return HANDLED_INFO;
+    }
+
+    if (errorCode === 'orbis_capture_failed' || (errorCode === '' && savedLocally)) {
+        showCompactInfoModal({
+            title: 'No se envió la reserva a Orbis',
+            message: `${text || 'Fallo en el envío a ORBISWEB.'}${savedNote ? '\n\n' + savedNote : ''}`,
+            hints: [
+                'Revisa la configuración de la integración ORBISWEB.',
+                'Corrige el problema indicado y vuelve a guardar la reserva.'
+            ]
+        });
+        return HANDLED_INFO;
+    }
+
+    if (errorCode === 'orbis_expediente_create_failed' || lower.includes('expediente')) {
+        showCompactInfoModal({
+            title: 'Error al crear expediente en Orbis',
+            message: text,
+            hints: [
+                'Revisa los campos obligatorios de expediente en Orbis.',
+                'Si prefieres, guarda sin crear expediente y vincúlalo después manualmente.'
+            ]
+        });
+        return HANDLED_INFO;
+    }
+
+    return false;
 }
 
 function scrollPopupToTop(ui) {
@@ -3056,6 +3637,29 @@ function lockCapturedFormFields(ui) {
         .forEach((field) => {
             field.disabled = true;
         });
+}
+
+async function applySavedLockedState(ui) {
+    // Estado final tras guardar la reserva (con o sin reintento a Orbis):
+    // bloqueamos los formularios y mostramos solo "Iniciar nueva captura".
+    isLastCaptureSavedLocked = true;
+    try {
+        await chrome.storage.local.set({
+            [CAPTURE_VIEW_STATE_KEY]: {
+                mode: 'saved_locked',
+                updatedAt: Date.now()
+            }
+        });
+    } catch (_) { /* noop */ }
+    if (!ui) return;
+    lockCapturedFormFields(ui);
+    if (ui.saveAllBtn) ui.saveAllBtn.style.display = 'none';
+    if (ui.discardBtn) ui.discardBtn.style.display = 'none';
+    if (ui.clearBtn) ui.clearBtn.style.display = 'inline-block';
+    document.querySelectorAll('.view-payload-btn').forEach(btn => {
+        btn.disabled = false;
+        btn.title = "Ver todos los campos que se enviarán al backend";
+    });
 }
 
 async function buildReservationsToSaveFromForm(savedReservationData, options = {}) {
