@@ -2510,14 +2510,6 @@ function createJourneyDropdownBlock(title, fields, data, index, fieldsToRenderSe
     const allowedFields = fields.filter(field => fieldsToRenderSet.has(field));
     if (allowedFields.length === 0) return null;
 
-    const section = document.createElement('div');
-    section.className = 'field-group-details';
-
-    const details = document.createElement('details');
-    const summary = document.createElement('summary');
-    summary.textContent = title;
-    details.appendChild(summary);
-
     const grid = document.createElement('div');
     grid.className = 'fields-grid-container';
     grid.style.marginTop = '10px';
@@ -2527,10 +2519,30 @@ function createJourneyDropdownBlock(title, fields, data, index, fieldsToRenderSe
         if (fieldElement) grid.appendChild(fieldElement);
     });
 
-    details.appendChild(grid);
+    const section = createCollapsibleFieldsSection(title, grid, 'field-group-details');
+    return section;
+}
+
+function createCollapsibleFieldsSection(title, contentNode, sectionClass = 'field-group-details') {
+    if (!contentNode) return null;
+    if (contentNode.childElementCount === 0) return null;
+
+    const section = document.createElement('div');
+    section.className = sectionClass;
+
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.className = 'capdata-collapse-toggle';
+    summary.textContent = title;
+    details.appendChild(summary);
+    details.appendChild(contentNode);
     details.addEventListener('toggle', notifySizeChange);
     section.appendChild(details);
     return section;
+}
+
+function getActiveIntegrationSectionTitle(integrationName) {
+    return `Campos específicos de ${integrationName}`;
 }
 
 function buildMultiEditableForm(ui, reservationsData) {
@@ -2660,11 +2672,13 @@ function buildMultiEditableForm(ui, reservationsData) {
                         fieldsDiv.appendChild(el);
                     }
                 });
-                if (fieldsDiv.children.length > 0) {
-                    const giavAutomationContainer = document.createElement('div');
-                    giavAutomationContainer.className = 'giav-automation-fields-container erp-fields-block';
-                    giavAutomationContainer.style.cssText = 'margin-top: 14px; padding: 10px 0; border-top: 1px solid #e5e7eb;';
-                    giavAutomationContainer.appendChild(fieldsDiv);
+                fieldsDiv.style.marginTop = '10px';
+                const giavAutomationContainer = createCollapsibleFieldsSection(
+                    getActiveIntegrationSectionTitle('Gesintur'),
+                    fieldsDiv,
+                    'giav-automation-fields-container erp-fields-block field-group-details'
+                );
+                if (giavAutomationContainer) {
                     wrapper.appendChild(giavAutomationContainer);
                 }
             }
@@ -2698,8 +2712,6 @@ function buildMultiEditableForm(ui, reservationsData) {
 
         // B) Integración con AVSIS (solo si está activa y visible); visibilidad por campo se gestiona en el mapeador
         if (typeof cachedAvsisStatus !== 'undefined' && cachedAvsisStatus && cachedIntegrationVisibility.avsis !== false) {
-            const avsisContainer = document.createElement('div');
-            avsisContainer.className = 'avsis-fields-container erp-fields-block';
             const fieldsDiv = document.createElement('div');
             fieldsDiv.className = 'fields-grid-container';
             if (typeof AVSIS_SPECIFIC_FIELDS !== 'undefined' && AVSIS_SPECIFIC_FIELDS) {
@@ -2716,14 +2728,17 @@ function buildMultiEditableForm(ui, reservationsData) {
                     }
                 });
             }
-            avsisContainer.appendChild(fieldsDiv);
-            wrapper.appendChild(avsisContainer);
+            fieldsDiv.style.marginTop = '10px';
+            const avsisSection = createCollapsibleFieldsSection(
+                getActiveIntegrationSectionTitle('AVSIS'),
+                fieldsDiv,
+                'avsis-fields-container erp-fields-block field-group-details'
+            );
+            if (avsisSection) wrapper.appendChild(avsisSection);
         }
 
         // C) Integración con Gesintur (solo si está activa y visible); visibilidad por campo se gestiona en el mapeador
         if (typeof cachedGesinturStatus !== 'undefined' && cachedGesinturStatus && cachedIntegrationVisibility.gesintur !== false) {
-            const gesinturContainer = document.createElement('div');
-            gesinturContainer.className = 'gesintur-fields-container erp-fields-block';
             const fieldsDiv = document.createElement('div');
             fieldsDiv.className = 'fields-grid-container';
             const gesinturFields = (rawResType === 'billetaje' || resTypeBase === 'aereo')
@@ -2742,14 +2757,17 @@ function buildMultiEditableForm(ui, reservationsData) {
                     fieldsDiv.appendChild(el);
                 }
             });
-            gesinturContainer.appendChild(fieldsDiv);
-            wrapper.appendChild(gesinturContainer);
+            fieldsDiv.style.marginTop = '10px';
+            const gesinturSection = createCollapsibleFieldsSection(
+                getActiveIntegrationSectionTitle('Gesintur'),
+                fieldsDiv,
+                'gesintur-fields-container erp-fields-block field-group-details'
+            );
+            if (gesinturSection) wrapper.appendChild(gesinturSection);
         }
 
         // D) Integración con ORBISWEB/Pipeline (solo si está activa y visible); visibilidad por campo se gestiona en el mapeador
         if (typeof cachedOrbiswebStatus !== 'undefined' && cachedOrbiswebStatus && cachedIntegrationVisibility.orbisweb !== false) {
-            const pipelineContainer = document.createElement('div');
-            pipelineContainer.className = 'pipeline-fields-container erp-fields-block';
             const fieldsDiv = document.createElement('div');
             fieldsDiv.className = 'fields-grid-container';
             if (typeof PIPELINE_ORBISWEB_FIELDS !== 'undefined' && PIPELINE_ORBISWEB_FIELDS) {
@@ -2786,8 +2804,13 @@ function buildMultiEditableForm(ui, reservationsData) {
                     }
                 });
             }
-            pipelineContainer.appendChild(fieldsDiv);
-            wrapper.appendChild(pipelineContainer);
+            fieldsDiv.style.marginTop = '10px';
+            const pipelineSection = createCollapsibleFieldsSection(
+                getActiveIntegrationSectionTitle('ORBISWEB'),
+                fieldsDiv,
+                'pipeline-fields-container erp-fields-block field-group-details'
+            );
+            if (pipelineSection) wrapper.appendChild(pipelineSection);
         }
 
         // =========================================================================
@@ -4088,7 +4111,7 @@ function enhanceSelectWithFixedDropdown(nativeSelect) {
         closeActiveCustomSelectDropdown();
 
         const menu = document.createElement('div');
-        menu.style.cssText = 'position:fixed;background:#fff;border:1px solid #cfd8e3;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.16);overflow:auto;z-index:2147483647;';
+        menu.style.cssText = 'position:absolute;left:0;top:calc(100% + 4px);width:100%;max-height:220px;background:#fff;border:1px solid #cfd8e3;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.16);overflow:auto;z-index:9999;';
         menu.setAttribute('role', 'listbox');
         menu.addEventListener('mousedown', (event) => {
             event.preventDefault();
@@ -4122,22 +4145,8 @@ function enhanceSelectWithFixedDropdown(nativeSelect) {
             menu.appendChild(item);
         });
 
-        document.body.appendChild(menu);
+        wrapper.appendChild(menu);
         trigger.setAttribute('aria-expanded', 'true');
-
-        const positionMenu = () => {
-            if (!document.body.contains(trigger)) {
-                closeActiveCustomSelectDropdown();
-                return;
-            }
-            const rect = trigger.getBoundingClientRect();
-            const menuTop = Math.round(rect.bottom + 4);
-            const maxHeight = Math.max(120, Math.floor(window.innerHeight - menuTop - 8));
-            menu.style.left = `${Math.round(rect.left)}px`;
-            menu.style.top = `${menuTop}px`;
-            menu.style.width = `${Math.round(rect.width)}px`;
-            menu.style.maxHeight = `${maxHeight}px`;
-        };
 
         const onPointerDown = (event) => {
             const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
@@ -4152,16 +4161,8 @@ function enhanceSelectWithFixedDropdown(nativeSelect) {
                 trigger.focus();
             }
         };
-        const onViewportChange = () => {
-            if (activeCustomSelectState && activeCustomSelectState.trigger === trigger) {
-                positionMenu();
-            }
-        };
-
         document.addEventListener('mousedown', onPointerDown, true);
         document.addEventListener('keydown', onKeyDown, true);
-        window.addEventListener('resize', onViewportChange, true);
-        window.addEventListener('scroll', onViewportChange, true);
 
         activeCustomSelectState = {
             trigger,
@@ -4169,13 +4170,9 @@ function enhanceSelectWithFixedDropdown(nativeSelect) {
             cleanup: [
                 () => document.removeEventListener('mousedown', onPointerDown, true),
                 () => document.removeEventListener('keydown', onKeyDown, true),
-                () => window.removeEventListener('resize', onViewportChange, true),
-                () => window.removeEventListener('scroll', onViewportChange, true),
                 () => trigger.setAttribute('aria-expanded', 'false')
             ]
         };
-
-        positionMenu();
 
         const selectedButton = optionButtons[nativeSelect.selectedIndex];
         if (selectedButton) {
@@ -4257,6 +4254,7 @@ function createFieldElement(fieldName, value, index, options = {}) {
         group.classList.add('field-group-details');
         const details = document.createElement('details');
         const summary = document.createElement('summary');
+        summary.className = 'capdata-collapse-toggle';
         summary.textContent = `👤 Ver/Ocultar ${value.length} Pasajero(s)`;
         details.appendChild(summary);
 
@@ -4265,44 +4263,43 @@ function createFieldElement(fieldName, value, index, options = {}) {
         
         value.forEach((pax, paxIndex) => {
             const paxDiv = document.createElement('div');
-            paxDiv.style.cssText = 'margin-bottom: 15px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f9fafb;';
+            paxDiv.className = 'passenger-card';
+            const normalizedTicketNumber = normalizeTicketNumberValue(pax.num_billete || '');
+            const showTicketField = normalizedTicketNumber.length > 0;
+            const ticketFieldHtml = showTicketField
+                ? `<div class="passenger-field-block">
+                        <label class="passenger-field-label">Nº Billete:</label>
+                        <input type="text" class="pax-data-input passenger-field-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="num_billete" value="${normalizedTicketNumber}">
+                   </div>`
+                : '';
 
             const passengerDescriptionHtml = showPassengerDescription
                 ? `
                 <!-- Descripción -->
-                <div style="margin-bottom: 8px;">
-                    <label style="display: block; font-size: 10px; color: #6b7280;">Descripción:</label>
-                    <textarea class="pax-data-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="descripcion" rows="2" style="width:100%; padding:4px; font-size:11px; border:1px solid #ccc; border-radius:4px; resize:vertical;">${String(pax.descripcion || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
+                <div class="passenger-grid">
+                    <div class="passenger-field-block">
+                        <label class="passenger-field-label">Descripción:</label>
+                        <textarea class="pax-data-input passenger-field-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="descripcion" rows="2" style="resize:vertical;">${String(pax.descripcion || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
+                    </div>
+                    <div class="passenger-field-spacer" aria-hidden="true"></div>
                 </div>`
                 : '';
 
             paxDiv.innerHTML = `
-                <div style="font-weight: bold; margin-bottom: 10px; color: #111827; font-size: 13px; display:flex; justify-content:space-between;">
-                    <span>Pasajero ${paxIndex + 1}: ${pax.nombre_pax || ''} ${pax.primer_apellidos_pax || ''}</span>
-                    <span style="color:#0672ff; font-size:10px;">ID: ${pax.contact_id || 'Nuevo'}</span>
+                <div class="passenger-header">
+                    <span>Pasajero ${paxIndex + 1}: ${pax.nombre_pax || ''}</span>
+                    <span class="passenger-id-badge">ID: ${pax.contact_id || 'Nuevo'}</span>
                 </div>
 
-                <!-- Nombre y Apellido -->
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
-                    <div>
-                        <label style="display: block; font-size: 10px; color: #6b7280;">Nombre:</label>
-                        <input type="text" class="pax-data-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="nombre_pax" value="${pax.nombre_pax || ''}" style="width:100%; padding:4px; font-size:11px; border:1px solid #ccc; border-radius:4px;">
+                <!-- Nombre + Tipo Pasajero -->
+                <div class="passenger-grid">
+                    <div class="passenger-field-block">
+                        <label class="passenger-field-label">Nombre:</label>
+                        <input type="text" class="pax-data-input passenger-field-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="nombre_pax" value="${pax.nombre_pax || ''}">
                     </div>
-                    <div>
-                        <label style="display: block; font-size: 10px; color: #6b7280;">Apellido:</label>
-                        <input type="text" class="pax-data-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="primer_apellidos_pax" value="${pax.primer_apellidos_pax || ''}" style="width:100%; padding:4px; font-size:11px; border:1px solid #ccc; border-radius:4px;">
-                    </div>
-                </div>
-
-                <!-- Nº Billete y Tipo Pasajero -->
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
-                    <div>
-                        <label style="display: block; font-size: 10px; color: #6b7280;">Nº Billete:</label>
-                        <input type="text" class="pax-data-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="num_billete" value="${normalizeTicketNumberValue(pax.num_billete || '')}" style="width:100%; padding:4px; font-size:11px; border:1px solid #ccc; border-radius:4px;">
-                    </div>
-                    <div>
-                        <label style="display: block; font-size: 10px; color: #6b7280;">Tipo Pasajero:</label>
-                        <select class="pax-data-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="tipo_pax" style="width:100%; padding:4px; font-size:11px; border:1px solid #ccc; border-radius:4px;">
+                    <div class="passenger-field-block">
+                        <label class="passenger-field-label">Tipo Pasajero:</label>
+                        <select class="pax-data-input passenger-field-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="tipo_pax">
                             <option value="Ad" ${pax.tipo_pax === 'Ad' ? 'selected' : ''}>Adulto</option>
                             <option value="Ch" ${pax.tipo_pax === 'Ch' ? 'selected' : ''}>Niño</option>
                             <option value="Na" ${pax.tipo_pax === 'Na' ? 'selected' : ''}>Bebé</option>
@@ -4310,13 +4307,16 @@ function createFieldElement(fieldName, value, index, options = {}) {
                     </div>
                 </div>
 
-                <!-- Residente Fam Numerosa -->
-                <div style="margin-bottom: 8px;">
-                    <label style="display: block; font-size: 10px; color: #6b7280;">Residente Fam Numerosa:</label>
-                    <select class="pax-data-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="residente_fam_numerosa" style="width:100%; padding:4px; font-size:11px; border:1px solid #ccc; border-radius:4px;">
-                        <option value="false" ${(pax.residente_fam_numerosa === true || pax.residente_fam_numerosa === 'true') ? '' : 'selected'}>No</option>
-                        <option value="true" ${(pax.residente_fam_numerosa === true || pax.residente_fam_numerosa === 'true') ? 'selected' : ''}>Sí</option>
-                    </select>
+                <!-- Nº Billete + Residente Fam Numerosa -->
+                <div class="passenger-grid">
+                    <div class="passenger-field-block">
+                        <label class="passenger-field-label">Residente Fam Numerosa:</label>
+                        <select class="pax-data-input passenger-field-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="residente_fam_numerosa">
+                            <option value="false" ${(pax.residente_fam_numerosa === true || pax.residente_fam_numerosa === 'true') ? '' : 'selected'}>No</option>
+                            <option value="true" ${(pax.residente_fam_numerosa === true || pax.residente_fam_numerosa === 'true') ? 'selected' : ''}>Sí</option>
+                        </select>
+                    </div>
+                    ${ticketFieldHtml}
                 </div>
                 ${passengerDescriptionHtml}
             `;
