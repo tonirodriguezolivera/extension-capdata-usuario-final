@@ -1833,7 +1833,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     else if (request.action === 'saveAllReservations') {
       console.log("Acción 'saveAllReservations' recibida. Enviando lote al backend.");
 
-      const { apiKey, reservationsData } = request;
+      const { apiKey, reservationsData, requestId } = request;
 
       if (!apiKey || !reservationsData) {
         sendResponse({ status: 'error', message: "Faltan datos (apiKey o reservationsData) para el guardado." });
@@ -1847,7 +1847,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         reservations_data: reservationsData,
         reservation_type: reservationsData[0]?.reservation_type || 'aereo',
         webhook_structure_mode: 'effective',
-        webhook_structure_integration_slug: null
+        webhook_structure_integration_slug: null,
+        // request_id permite a la extensión hacer polling al endpoint
+        // GET /api/save_all_reservations/progress/<id> para pintar el
+        // checklist en vivo del backend. Si no se pasa, el backend funciona
+        // igual pero sin reportar progreso (no-op).
+        request_id: requestId || null
       };
       console.log('[BACKEND] Payload que se envía a POST /api/save_all_reservations:', payloadToSend);
       console.log('[BACKEND] JSON completo (reservations_data):', JSON.stringify(reservationsData, null, 2));
@@ -1866,8 +1871,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           console.error("❌ Error grave al llamar a /api/save_all_reservations:", err);
           sendResponse({ status: 'error', message: "Error de conexión en el guardado: " + err.toString() });
       });
-      
+
       return true; // Esencial para la respuesta asíncrona
+    }
+
+    else if (request.action === 'getSaveProgress') {
+      // Polling ligero para que el popup pinte el checklist de progreso.
+      // Devuelve el estado actual escrito por el backend mientras procesa el
+      // POST /api/save_all_reservations. Diseñado para llamarse cada ~400 ms.
+      const { apiKey, requestId } = request;
+      if (!apiKey || !requestId) {
+        sendResponse({ status: 'error', message: 'Falta apiKey o requestId.' });
+        return true;
+      }
+      const url = `${API_BASE_URL}/api/save_all_reservations/progress/${encodeURIComponent(requestId)}?api_key=${encodeURIComponent(apiKey)}`;
+      fetch(url, { method: 'GET' })
+        .then(res => res.json().then(j => ({ httpStatus: res.status, body: j })))
+        .then(({ httpStatus, body }) => {
+          if (httpStatus === 404) {
+            sendResponse({ status: 'not_found' });
+            return;
+          }
+          if (httpStatus === 403) {
+            sendResponse({ status: 'forbidden' });
+            return;
+          }
+          sendResponse(body || { status: 'error', message: 'Respuesta vacía' });
+        })
+        .catch(err => {
+          // Errores de red en polling son no críticos: la siguiente tick los reintentará.
+          sendResponse({ status: 'network_error', message: err.toString() });
+        });
+      return true;
     }
 
     else if (request.action === 'getIntegrationVisibility') {

@@ -2943,6 +2943,207 @@ function buildMultiEditableForm(ui, reservationsData) {
     }
 }
 
+// ============================================================================
+// Panel de progreso del guardado (checklist en vivo)
+// ----------------------------------------------------------------------------
+// Pinta los pasos REALES que el backend reporta durante POST
+// /api/save_all_reservations vía polling al endpoint
+// /api/save_all_reservations/progress/<id>.
+//
+// No simula nada: si el backend no devuelve un paso (porque la integración no
+// está activa) ese paso no aparece. Si un paso falla, aparece en rojo.
+// ============================================================================
+
+const SAVE_PROGRESS_POLL_INTERVAL_MS = 450;
+
+function _genSaveProgressRequestId() {
+    try {
+        if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+            return window.crypto.randomUUID();
+        }
+    } catch (_) { /* noop */ }
+    return 'sp-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+}
+
+function _saveProgressEls() {
+    return {
+        panel: document.getElementById('saveProgressPanel'),
+        title: document.getElementById('saveProgressTitle'),
+        count: document.getElementById('saveProgressCount'),
+        stepsContainer: document.getElementById('saveProgressSteps'),
+        final: document.getElementById('saveProgressFinal'),
+    };
+}
+
+function showSaveProgressPanel(initialReservationCount) {
+    const els = _saveProgressEls();
+    if (!els.panel) return;
+    els.panel.classList.remove('is-error', 'is-done');
+    els.title.textContent = (initialReservationCount && initialReservationCount > 1)
+        ? `Guardando ${initialReservationCount} reservas...`
+        : 'Guardando reserva...';
+    els.count.textContent = '';
+    els.final.textContent = '';
+    els.final.style.display = 'none';
+    // Estado inicial: un solo paso "Conectando con el servidor..." en pending.
+    // Se reemplaza en cuanto llegue la primera respuesta del polling con los
+    // pasos reales del backend.
+    els.stepsContainer.innerHTML = `
+        <div class="sp-step is-running" data-step-key="__bootstrap">
+            <span class="sp-step-icon">·</span>
+            <div class="sp-step-body">
+                <div class="sp-step-label">Conectando con el servidor...</div>
+                <div class="sp-step-msg"></div>
+            </div>
+        </div>
+    `;
+    els.panel.style.display = 'block';
+}
+
+function hideSaveProgressPanel(delayMs = 0) {
+    const els = _saveProgressEls();
+    if (!els.panel) return;
+    const doHide = () => { els.panel.style.display = 'none'; };
+    if (delayMs > 0) {
+        setTimeout(doHide, delayMs);
+    } else {
+        doHide();
+    }
+}
+
+function _renderSaveProgressSteps(steps) {
+    if (!Array.isArray(steps) || steps.length === 0) return '';
+    return steps.map((s) => {
+        const status = (s && s.status) || 'pending';
+        const label = (s && s.label) || s.key || '';
+        const msg = s && s.message ? String(s.message) : '';
+        let iconChar = '';
+        if (status === 'done') iconChar = '✓';
+        else if (status === 'error') iconChar = '✕';
+        else if (status === 'skipped') iconChar = '—';
+        else if (status === 'pending') iconChar = '·';
+        // running: el spinner lo dibuja el CSS, el icon va vacío.
+
+        // Escape mínimo (los mensajes vienen de nuestro backend, pero por si acaso)
+        const safeLabel = label.replace(/[<>&]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;'}[c]));
+        const safeMsg = msg.replace(/[<>&]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;'}[c]));
+
+        return `
+            <div class="sp-step is-${status}" data-step-key="${s.key || ''}">
+                <span class="sp-step-icon">${iconChar}</span>
+                <div class="sp-step-body">
+                    <div class="sp-step-label">${safeLabel}</div>
+                    ${safeMsg ? `<div class="sp-step-msg">${safeMsg}</div>` : ''}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function updateSaveProgressFromBackend(progressData) {
+    const els = _saveProgressEls();
+    if (!els.panel || !progressData) return;
+    const steps = Array.isArray(progressData.steps) ? progressData.steps : [];
+    const overall = progressData.overall_status || 'running';
+
+    // Solo re-renderizamos si la "huella" cambió, para no parpadear el DOM
+    // en cada tick de polling cuando no hay novedades.
+    const fingerprint = JSON.stringify(steps.map(s => [s.key, s.status, s.message]));
+    if (els.panel.dataset.lastFingerprint !== fingerprint) {
+        els.panel.dataset.lastFingerprint = fingerprint;
+        els.stepsContainer.innerHTML = _renderSaveProgressSteps(steps);
+    }
+
+    // Contador en cabecera: X/Y pasos completados (excluyendo skipped).
+    const total = steps.filter(s => s.status !== 'skipped').length;
+    const done = steps.filter(s => s.status === 'done').length;
+    els.count.textContent = total > 0 ? `${done}/${total}` : '';
+
+    els.panel.classList.toggle('is-error', overall === 'error');
+    els.panel.classList.toggle('is-done', overall === 'done');
+
+    if (overall === 'done' && progressData.final_message) {
+        els.title.textContent = '✅ Guardado completado';
+        els.final.textContent = progressData.final_message;
+        els.final.style.display = 'block';
+    } else if (overall === 'error') {
+        els.title.textContent = '❌ Error en el guardado';
+        if (progressData.final_message) {
+            els.final.textContent = progressData.final_message;
+            els.final.style.display = 'block';
+        }
+    }
+}
+
+function startSaveProgressPolling(apiKey, requestId, onUpdate) {
+    let stopped = false;
+    let consecutiveNotFound = 0;
+
+    const tick = async () => {
+        if (stopped) return;
+        try {
+            const resp = await chrome.runtime.sendMessage({
+                action: 'getSaveProgress',
+                apiKey,
+                requestId,
+            });
+            if (stopped) return;
+            if (resp && resp.status === 'ok' && resp.progress) {
+                consecutiveNotFound = 0;
+                try { onUpdate(resp.progress); } catch (e) { console.warn('Render progreso:', e); }
+            } else if (resp && resp.status === 'not_found') {
+                // El backend todavía no ha creado la fila. Es normal en los
+                // primeros 1-2 ticks; si pasa de 25 (~11s) abandonamos.
+                consecutiveNotFound += 1;
+                if (consecutiveNotFound > 25) {
+                    stopped = true;
+                    return;
+                }
+            }
+            // network_error / forbidden / error: silencioso, reintentamos
+        } catch (e) {
+            // Errores duros (extensión recargada, etc.): paramos.
+            stopped = true;
+            return;
+        }
+        if (!stopped) {
+            setTimeout(tick, SAVE_PROGRESS_POLL_INTERVAL_MS);
+        }
+    };
+    setTimeout(tick, SAVE_PROGRESS_POLL_INTERVAL_MS);
+
+    return {
+        stop() { stopped = true; }
+    };
+}
+
+function finalizeSaveProgressFromResponse(response) {
+    // Caso de seguridad: si el polling no llegó a recibir el estado final
+    // (porque la respuesta del POST vino más rápido que el siguiente tick),
+    // pintamos el resultado a partir de la respuesta HTTP del POST.
+    const els = _saveProgressEls();
+    if (!els.panel || els.panel.style.display === 'none') return;
+    // Si ya pintamos un estado final (done o error), no sobrescribimos.
+    if (els.panel.classList.contains('is-done') || els.panel.classList.contains('is-error')) {
+        return;
+    }
+    if (response && response.status === 'ok') {
+        els.panel.classList.add('is-done');
+        els.title.textContent = '✅ Guardado completado';
+        if (response.message) {
+            els.final.textContent = response.message;
+            els.final.style.display = 'block';
+        }
+    } else {
+        els.panel.classList.add('is-error');
+        els.title.textContent = '❌ Error en el guardado';
+        if (response && response.message) {
+            els.final.textContent = response.message;
+            els.final.style.display = 'block';
+        }
+    }
+}
+
 async function saveAllNewReservations(ui) {
     scrollPopupToTop(ui);
 
@@ -3018,11 +3219,35 @@ async function saveAllNewReservations(ui) {
         }
         console.log('[POPUP][ENVÍO] ReservationsData completo que se envía:', reservationsToSave);
 
-        const response = await chrome.runtime.sendMessage({
-            action: 'saveAllReservations', 
-            apiKey: apiKey,
-            reservationsData: reservationsToSave
-        });
+        // --- Checklist de progreso en vivo ---------------------------------
+        // Generamos un ID único, abrimos el panel y arrancamos polling al
+        // endpoint /api/save_all_reservations/progress/<id> mientras el POST
+        // principal trabaja. El backend va escribiendo el avance real de cada
+        // paso del flujo (validación, procesamiento, guardado, webhook, Orbis).
+        const __sp_requestId = _genSaveProgressRequestId();
+        showSaveProgressPanel(reservationsToSave.length);
+        const __sp_poller = startSaveProgressPolling(apiKey, __sp_requestId, updateSaveProgressFromBackend);
+
+        let response;
+        try {
+            response = await chrome.runtime.sendMessage({
+                action: 'saveAllReservations',
+                apiKey: apiKey,
+                reservationsData: reservationsToSave,
+                requestId: __sp_requestId
+            });
+        } finally {
+            // Damos un margen para un último tick del polling y luego paramos.
+            setTimeout(() => __sp_poller.stop(), 600);
+        }
+
+        // Si el polling no llegó al estado final, lo pintamos a partir de la
+        // respuesta HTTP del POST principal (caso muy rápido).
+        finalizeSaveProgressFromResponse(response);
+        // Auto-ocultamos el panel a los pocos segundos en caso de éxito.
+        if (response && response.status === 'ok') {
+            hideSaveProgressPanel(3500);
+        }
 
         if (response.status === 'ok') {
             const isAllOmitted = !!response.all_omitted
@@ -3079,6 +3304,10 @@ async function saveAllNewReservations(ui) {
         showStatus(ui, `Error de comunicación: ${e.message}`, 'error');
         scrollPopupToTop(ui);
         ui.saveAllBtn.disabled = false;
+        // Si el panel de progreso quedó abierto sin estado final, lo cerramos
+        // marcándolo como error para que la UI no quede colgada en "Conectando..."
+        finalizeSaveProgressFromResponse({ status: 'error', message: e.message || 'Error de comunicación' });
+        hideSaveProgressPanel(2500);
     } finally {
         showSpinner(ui, false);
     }

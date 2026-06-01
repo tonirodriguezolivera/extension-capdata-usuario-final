@@ -311,6 +311,139 @@
     #notesTextarea::placeholder {
       color: #999;
     }
+
+    /* --- PANEL DE PROGRESO DE GUARDADO (checklist en vivo) ---
+       Refleja paso a paso lo que el backend reporta durante POST
+       /api/save_all_reservations vía polling al endpoint /progress/<id>.
+       Estilo claro alineado con la paleta de la extensión (#0672ff). */
+    #saveProgressPanel {
+      display: none;
+      margin-bottom: 14px;
+      border: 1px solid #cdd8ea;
+      border-radius: 8px;
+      background: #f5f8ff;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(6, 114, 255, 0.06);
+    }
+    #saveProgressPanel.is-error { border-color: #f5b5b5; background: #fff5f5; }
+    #saveProgressPanel.is-done  { border-color: #b6e2c4; background: #f1fbf4; }
+
+    #saveProgressPanel .sp-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 12px;
+      font-weight: 700;
+      font-size: 13px;
+      color: #0b57d0;
+      background: linear-gradient(90deg, #eaf1ff 0%, #f5f8ff 100%);
+      border-bottom: 1px solid #cdd8ea;
+    }
+    #saveProgressPanel.is-error .sp-head { color: #b42318; background: linear-gradient(90deg, #ffe6e6 0%, #fff5f5 100%); border-bottom-color: #f5b5b5; }
+    #saveProgressPanel.is-done  .sp-head { color: #1f7a3a; background: linear-gradient(90deg, #e6ffe6 0%, #f1fbf4 100%); border-bottom-color: #b6e2c4; }
+
+    #saveProgressPanel .sp-head-title { display: flex; align-items: center; gap: 8px; }
+    #saveProgressPanel .sp-head-icon { font-size: 14px; line-height: 1; }
+    #saveProgressPanel .sp-head-count { font-size: 11px; font-weight: 600; color: #555; }
+
+    #saveProgressPanel .sp-body { padding: 6px 12px 10px; }
+
+    #saveProgressPanel .sp-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 7px 0;
+      border-bottom: 1px dashed #e4ebf7;
+      font-size: 13px;
+      color: #374151;
+    }
+    #saveProgressPanel .sp-step:last-child { border-bottom: none; }
+
+    #saveProgressPanel .sp-step-icon {
+      flex-shrink: 0;
+      width: 18px;
+      height: 18px;
+      margin-top: 1px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      font-size: 11px;
+      line-height: 1;
+      font-weight: 700;
+    }
+    /* Pending: gris suave */
+    #saveProgressPanel .sp-step.is-pending .sp-step-icon {
+      background: #e5e7eb;
+      color: #9ca3af;
+      border: 1px solid #d1d5db;
+    }
+    /* Running: spinner azul */
+    #saveProgressPanel .sp-step.is-running .sp-step-icon {
+      background: transparent;
+      border: 2px solid #cdd8ea;
+      border-top-color: #0672ff;
+      animation: sp-spin 0.9s linear infinite;
+      color: transparent;
+    }
+    /* Done: tick verde */
+    #saveProgressPanel .sp-step.is-done .sp-step-icon {
+      background: #28a745;
+      color: #fff;
+      border: 1px solid #1f7a3a;
+    }
+    /* Skipped: guion gris */
+    #saveProgressPanel .sp-step.is-skipped .sp-step-icon {
+      background: #e5e7eb;
+      color: #6b7280;
+      border: 1px solid #d1d5db;
+    }
+    /* Error: cruz roja */
+    #saveProgressPanel .sp-step.is-error .sp-step-icon {
+      background: #dc3545;
+      color: #fff;
+      border: 1px solid #a01d2a;
+    }
+
+    #saveProgressPanel .sp-step-body { flex: 1; min-width: 0; }
+    #saveProgressPanel .sp-step-label {
+      font-weight: 600;
+      color: #1f2937;
+      line-height: 1.25;
+    }
+    #saveProgressPanel .sp-step.is-pending .sp-step-label { color: #9ca3af; }
+    #saveProgressPanel .sp-step.is-skipped .sp-step-label { color: #6b7280; text-decoration: line-through; }
+    #saveProgressPanel .sp-step.is-error   .sp-step-label { color: #b42318; }
+
+    #saveProgressPanel .sp-step-msg {
+      margin-top: 2px;
+      font-size: 11px;
+      color: #6b7280;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+    #saveProgressPanel .sp-step.is-running .sp-step-msg { color: #0b57d0; }
+    #saveProgressPanel .sp-step.is-error   .sp-step-msg { color: #b42318; }
+    #saveProgressPanel .sp-step.is-done    .sp-step-msg { color: #1f7a3a; }
+
+    #saveProgressPanel .sp-final {
+      margin-top: 8px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      background: #ffffff;
+      border: 1px solid #cdd8ea;
+      color: #0b57d0;
+      display: none;
+    }
+    #saveProgressPanel.is-error .sp-final { display: block; background: #fff; border-color: #f5b5b5; color: #b42318; }
+    #saveProgressPanel.is-done  .sp-final { display: block; background: #fff; border-color: #b6e2c4; color: #1f7a3a; }
+
+    @keyframes sp-spin {
+      0%   { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
@@ -394,6 +527,25 @@
         <button id="capturarReserva">Capturar Datos</button>
         <div id="spinnerContainer"><div class="spinner"></div></div>
       </div>
+
+      <!-- Panel de progreso del guardado (checklist en vivo).
+           El popup.js lo rellena dinámicamente con los pasos REALES que
+           reporta el backend (POST /api/save_all_reservations) vía polling
+           al endpoint /api/save_all_reservations/progress/<id>. -->
+      <div id="saveProgressPanel" aria-live="polite" role="status">
+        <div class="sp-head">
+          <div class="sp-head-title">
+            <span class="sp-head-icon">📦</span>
+            <span id="saveProgressTitle">Guardando reserva...</span>
+          </div>
+          <span class="sp-head-count" id="saveProgressCount"></span>
+        </div>
+        <div class="sp-body">
+          <div id="saveProgressSteps"></div>
+          <div class="sp-final" id="saveProgressFinal"></div>
+        </div>
+      </div>
+
       <div id="reservationTypeContainer" style="display: none;">
         <label for="reservationType">Tipo de Reserva:</label>
         <select id="reservationType">
