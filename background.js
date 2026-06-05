@@ -1318,7 +1318,20 @@ async function startFullCaptureProcess(apiKey, tabId, reservationType) {
 
         // 8. GUARDAR EN STORAGE Y NOTIFICAR
         if (reservationsWithType.length > 0) {
-            await chrome.storage.local.set({ savedReservationData: reservationsWithType });
+            // Guardamos también el HTML ya limpio capturado en el paso 1 para que
+            // viaje con el POST a /api/save_all_reservations y el backend pueda
+            // persistirlo en RequestLog.raw_html. Sirve para depurar capturas
+            // fallidas reportadas por usuarios. Truncado defensivo a 500 KB para
+            // no superar el quota de chrome.storage.local.
+            const capturedHtml = injections[0].result || '';
+            const HTML_MAX_CHARS = 500_000;
+            const htmlToStore = capturedHtml.length > HTML_MAX_CHARS
+                ? capturedHtml.slice(0, HTML_MAX_CHARS) + `\n<!-- [TRUNCATED at ${HTML_MAX_CHARS} chars; original ${capturedHtml.length}] -->`
+                : capturedHtml;
+            await chrome.storage.local.set({
+                savedReservationData: reservationsWithType,
+                savedReservationPageHtml: htmlToStore,
+            });
         }
 
         chrome.notifications.create({
@@ -1842,34 +1855,52 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
       const serverUrl = `${API_BASE_URL}/api/save_all_reservations`;
 
-      const payloadToSend = {
-        api_key: apiKey,
-        reservations_data: reservationsData,
-        reservation_type: reservationsData[0]?.reservation_type || 'aereo',
-        webhook_structure_mode: 'effective',
-        webhook_structure_integration_slug: null,
-        // request_id permite a la extensión hacer polling al endpoint
-        // GET /api/save_all_reservations/progress/<id> para pintar el
-        // checklist en vivo del backend. Si no se pasa, el backend funciona
-        // igual pero sin reportar progreso (no-op).
-        request_id: requestId || null
-      };
-      console.log('[BACKEND] Payload que se envía a POST /api/save_all_reservations:', payloadToSend);
-      console.log('[BACKEND] JSON completo (reservations_data):', JSON.stringify(reservationsData, null, 2));
+      // Recuperamos el HTML capturado en startFullCaptureProcess (paso 1) que
+      // guardamos en chrome.storage.local junto con savedReservationData. Si
+      // por cualquier motivo no existe (captura manual, recuperación de sesión
+      // antigua...), el backend simplemente recibirá null y no romperá nada.
+      chrome.storage.local.get(['savedReservationPageHtml'], (storageRes) => {
+        const pageHtml = (storageRes && typeof storageRes.savedReservationPageHtml === 'string')
+          ? storageRes.savedReservationPageHtml
+          : null;
 
-      fetch(serverUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payloadToSend)
-      })
-      .then(res => res.json())
-      .then(data => {
-          console.log("🛰️ Respuesta del servidor a /api/save_all_reservations:", data);
-          sendResponse(data);
-      })
-      .catch(err => {
-          console.error("❌ Error grave al llamar a /api/save_all_reservations:", err);
-          sendResponse({ status: 'error', message: "Error de conexión en el guardado: " + err.toString() });
+        const payloadToSend = {
+          api_key: apiKey,
+          reservations_data: reservationsData,
+          reservation_type: reservationsData[0]?.reservation_type || 'aereo',
+          webhook_structure_mode: 'effective',
+          webhook_structure_integration_slug: null,
+          // request_id permite a la extensión hacer polling al endpoint
+          // GET /api/save_all_reservations/progress/<id> para pintar el
+          // checklist en vivo del backend. Si no se pasa, el backend funciona
+          // igual pero sin reportar progreso (no-op).
+          request_id: requestId || null,
+          // HTML limpio capturado por la extensión; el backend lo guarda en
+          // RequestLog.raw_html (saneado y truncado a 500 KB) para depuración.
+          page_html: pageHtml
+        };
+        console.log('[BACKEND] Payload que se envía a POST /api/save_all_reservations:', payloadToSend);
+        console.log('[BACKEND] JSON completo (reservations_data):', JSON.stringify(reservationsData, null, 2));
+
+        fetch(serverUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payloadToSend)
+        })
+        .then(res => res.json())
+        .then(data => {
+            console.log("🛰️ Respuesta del servidor a /api/save_all_reservations:", data);
+            // Limpiamos el HTML de storage tras un guardado correcto para no
+            // dejar HTML de capturas antiguas asociado a la próxima reserva.
+            if (data && data.status !== 'error') {
+              chrome.storage.local.remove('savedReservationPageHtml');
+            }
+            sendResponse(data);
+        })
+        .catch(err => {
+            console.error("❌ Error grave al llamar a /api/save_all_reservations:", err);
+            sendResponse({ status: 'error', message: "Error de conexión en el guardado: " + err.toString() });
+        });
       });
 
       return true; // Esencial para la respuesta asíncrona
