@@ -2242,6 +2242,9 @@ async function clearStateAndForm(ui, showInitialMessage = true) {
     await chrome.storage.local.remove(['savedReservationData', CAPTURE_VIEW_STATE_KEY]);
     isLastCaptureSavedLocked = false;
     clearFormDOM(ui);
+    // Al limpiar ocultamos también el recuadro de progreso del guardado: ya no
+    // tiene sentido seguir mostrándolo si se ha limpiado la captura.
+    hideSaveProgressPanel();
     ui.capturarReservaBtn.style.display = 'block';
     ui.globalActionsRow.style.display = 'none';
 
@@ -2633,9 +2636,15 @@ function buildMultiEditableForm(ui, reservationsData) {
         if (returnBlock) wrapper.appendChild(returnBlock);
         
         // 4. LÓGICA DE PASAJEROS (Fuera del grid)
-        if (fieldsToRender.includes('pasajeros') && data.pasajeros) {
+        // Mostramos SIEMPRE el recuadro de pasajeros (aunque la captura no haya
+        // traído ninguno), partiendo de un pasajero vacío, para que el usuario
+        // pueda rellenarlo a mano si la captura no lo encontró.
+        if (fieldsToRender.includes('pasajeros')) {
             const showPassengerDescription = !isGiavReservationFlow(rawResType);
-            const passengersElement = createFieldElement('pasajeros', data.pasajeros, index, { showPassengerDescription, reservationType: rawResType });
+            const paxData = (Array.isArray(data.pasajeros) && data.pasajeros.length > 0)
+                ? data.pasajeros
+                : [{}];
+            const passengersElement = createFieldElement('pasajeros', paxData, index, { showPassengerDescription, reservationType: rawResType });
             if (passengersElement) {
                 wrapper.appendChild(passengersElement);
             }
@@ -2916,10 +2925,14 @@ function buildMultiEditableForm(ui, reservationsData) {
                     e.target.value = val;
                 }
                 if (!reservationsData[resIdx].pasajeros) reservationsData[resIdx].pasajeros = [];
-                if (reservationsData[resIdx].pasajeros[paxIdx]) {
-                    reservationsData[resIdx].pasajeros[paxIdx][key] = val;
-                    chrome.storage.local.set({ savedReservationData: reservationsData });
+                // Si la fila de pasajero no existía (recuadro vacío mostrado para
+                // que el usuario lo rellene a mano), la creamos para no perder lo
+                // que escriba.
+                if (!reservationsData[resIdx].pasajeros[paxIdx]) {
+                    reservationsData[resIdx].pasajeros[paxIdx] = {};
                 }
+                reservationsData[resIdx].pasajeros[paxIdx][key] = val;
+                chrome.storage.local.set({ savedReservationData: reservationsData });
             }
         });
     });
@@ -3142,6 +3155,46 @@ function finalizeSaveProgressFromResponse(response) {
             els.final.style.display = 'block';
         }
     }
+}
+
+function markSaveProgressRetrySucceeded(message) {
+    // Tras un reenvío manual a ORBISWEB con éxito, el checklist de guardado se
+    // había quedado en rojo (el polling paró al fallar el POST). Repintamos los
+    // pasos en error a verde y la cabecera a "completado" para que no parezca un fallo.
+    const els = _saveProgressEls();
+    if (!els.panel || els.panel.style.display === 'none') return;
+
+    const errorSteps = els.stepsContainer
+        ? els.stepsContainer.querySelectorAll('.sp-step.is-error')
+        : [];
+    errorSteps.forEach((stepEl) => {
+        stepEl.classList.remove('is-error');
+        stepEl.classList.add('is-done');
+        const icon = stepEl.querySelector('.sp-step-icon');
+        if (icon) icon.textContent = '✓';
+        const msgEl = stepEl.querySelector('.sp-step-msg');
+        if (msgEl) msgEl.textContent = 'Reenviado correctamente a Orbis Web';
+    });
+
+    els.panel.classList.remove('is-error');
+    els.panel.classList.add('is-done');
+    if (els.title) els.title.textContent = '✅ Guardado completado';
+    if (els.final && message) {
+        els.final.textContent = message;
+        els.final.style.display = 'block';
+    }
+
+    // Recalcular el contador X/Y de la cabecera (un error pasó a done).
+    try {
+        const allSteps = els.stepsContainer.querySelectorAll('.sp-step');
+        let total = 0, done = 0;
+        allSteps.forEach((st) => {
+            if (st.classList.contains('is-skipped')) return;
+            total += 1;
+            if (st.classList.contains('is-done')) done += 1;
+        });
+        if (els.count) els.count.textContent = total > 0 ? `${done}/${total}` : '';
+    } catch (e) { /* contador es cosmético */ }
 }
 
 async function saveAllNewReservations(ui) {
@@ -3644,7 +3697,7 @@ function showOrbisProviderRetryModal({
     });
 }
 
-async function performOrbisRetrySend({ requestLogId, providerId = null, skipProvider = false, createExpediente = false, apiKey, employeeToken = null }) {
+async function performOrbisRetrySend({ requestLogId, providerId = null, skipProvider = false, createExpediente = false, nif = null, apiKey, employeeToken = null }) {
     if (!requestLogId) {
         return { status: 'error', message: 'Falta request_log_id para reintentar.' };
     }
@@ -3660,6 +3713,7 @@ async function performOrbisRetrySend({ requestLogId, providerId = null, skipProv
             body.num_id_proveedor = providerId;
         }
         if (createExpediente) body.create_expediente = true;
+        if (nif) body.nif = nif;
         const headers = { 'Content-Type': 'application/json' };
         if (apiKey) headers['X-API-Key'] = apiKey;
         if (employeeToken) headers['X-Employee-Token'] = employeeToken;
@@ -3687,6 +3741,54 @@ async function performOrbisRetrySend({ requestLogId, providerId = null, skipProv
         console.error('[ORBIS RETRY] EXCEPTION', e);
         return { status: 'error', message: `Error de red al reintentar: ${e?.message || e}` };
     }
+}
+
+function showOrbisNifPromptModal({ message, previousError = '' } = {}) {
+    // Pide el NIF del viajero cuando Orbis no pudo identificar al cliente (el
+    // contacto no tenía NIF). Devuelve el NIF (string) o null si se cancela.
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.45);display:flex;align-items:center;justify-content:center;z-index:10060;padding:12px;';
+        const modal = document.createElement('div');
+        modal.style.cssText = 'position:relative;width:min(420px,95vw);background:#fff;border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,0.2);padding:16px;font-family:Arial,sans-serif;';
+        const title = document.createElement('div');
+        title.textContent = 'Falta el NIF del viajero';
+        title.style.cssText = 'font-weight:bold;font-size:15px;margin-bottom:8px;color:#111827;';
+        const msg = document.createElement('div');
+        msg.textContent = message || 'Orbis necesita el NIF del viajero para crear el servicio bajo ese cliente. Introdúcelo:';
+        msg.style.cssText = 'font-size:13px;color:#374151;margin-bottom:10px;white-space:pre-line;';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'NIF / DNI / NIE del viajero';
+        input.style.cssText = 'width:100%;box-sizing:border-box;padding:8px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;margin-bottom:6px;';
+        const err = document.createElement('div');
+        err.textContent = previousError || '';
+        err.style.cssText = 'color:#b91c1c;font-size:12px;min-height:14px;margin-bottom:8px;';
+        const rowBtns = document.createElement('div');
+        rowBtns.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+        const cancel = document.createElement('button');
+        cancel.type = 'button'; cancel.textContent = 'Cancelar';
+        cancel.style.cssText = 'padding:8px 12px;border:1px solid #d1d5db;background:#fff;border-radius:6px;cursor:pointer;';
+        const ok = document.createElement('button');
+        ok.type = 'button'; ok.textContent = 'Enviar con este NIF';
+        ok.style.cssText = 'padding:8px 12px;border:none;background:#2563eb;color:#fff;border-radius:6px;cursor:pointer;';
+        const close = (val) => { try { document.body.removeChild(overlay); } catch (_) {} resolve(val); };
+        cancel.addEventListener('click', () => close(null));
+        ok.addEventListener('click', () => {
+            const v = input.value.trim();
+            if (v) close(v); else { err.textContent = 'Introduce un NIF.'; }
+        });
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') ok.click();
+            if (e.key === 'Escape') close(null);
+        });
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+        rowBtns.appendChild(cancel); rowBtns.appendChild(ok);
+        modal.appendChild(title); modal.appendChild(msg); modal.appendChild(input); modal.appendChild(err); modal.appendChild(rowBtns);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+        setTimeout(() => input.focus(), 50);
+    });
 }
 
 async function showFriendlyOrbisErrorModal(responseOrMessage, context = {}) {
@@ -3744,6 +3846,38 @@ async function showFriendlyOrbisErrorModal(responseOrMessage, context = {}) {
         'orbis_expediente_create_failed',
     ]);
     const canOfferRetry = retrySupported && requestLogId && providerErrorCodes.has(errorCode);
+
+    // Falta el NIF del viajero -> pedirlo y reenviar con él (bucle hasta que se
+    // acepte o el usuario cancele).
+    if (errorCode === 'orbis_missing_nif' && requestLogId) {
+        let employeeToken = null;
+        try {
+            const stored = await chrome.storage.local.get('employeeToken');
+            employeeToken = stored?.employeeToken || null;
+        } catch (_) { employeeToken = null; }
+        let prevErr = '';
+        while (true) {
+            const nif = await showOrbisNifPromptModal({
+                message: (text || 'Orbis necesita el NIF del viajero para crear el servicio.')
+                    + (savedNote ? '\n\n' + savedNote : ''),
+                previousError: prevErr,
+            });
+            if (!nif) return HANDLED_CANCELLED;
+            if (ui) showStatus(ui, 'Reenviando a ORBISWEB con el NIF...', 'info');
+            const retryResp = await performOrbisRetrySend({ requestLogId, nif, apiKey, employeeToken });
+            if (retryResp?.status === 'ok') {
+                markSaveProgressRetrySucceeded('Servicio añadido a ORBISWEB con el NIF del viajero.');
+                showCompactInfoModal({
+                    title: 'Enviado a ORBISWEB',
+                    message: 'El servicio se añadió al expediente con el NIF del viajero.',
+                    hints: []
+                });
+                if (ui) showStatus(ui, 'Servicio añadido a ORBISWEB.', 'success');
+                return HANDLED_RETRY_OK;
+            }
+            prevErr = retryResp?.message || 'No se pudo enviar con ese NIF. Revísalo e inténtalo de nuevo.';
+        }
+    }
 
     if (canOfferRetry) {
         const providerSuffix = attemptedProviderId ? ` (numIdProveedor intentado: ${attemptedProviderId})` : '';
@@ -3824,17 +3958,25 @@ async function showFriendlyOrbisErrorModal(responseOrMessage, context = {}) {
                 employeeToken,
             });
             if (retryResp?.status === 'ok') {
+                const pnrOnly = !!retryResp.pnr_only_no_service;
+                markSaveProgressRetrySucceeded(
+                    pnrOnly
+                        ? 'PNR registrado en ORBISWEB (sin servicio: falta proveedor).'
+                        : 'Reserva reenviada correctamente a ORBISWEB.'
+                );
                 const expedienteSuffix = retryResp.created_num_id_expediente
                     ? ` Expediente creado: ${retryResp.created_num_id_expediente}.`
                     : '';
                 showCompactInfoModal({
-                    title: 'Reenviada a ORBISWEB',
-                    message: skipProvider
-                        ? 'La reserva se reenvió correctamente a ORBISWEB sin proveedor.'
-                        : `La reserva se reenvió correctamente a ORBISWEB con numIdProveedor=${retryResp.used_num_id_proveedor ?? providerId}.${expedienteSuffix}`,
+                    title: pnrOnly ? 'PNR registrado (sin servicio)' : 'Reenviada a ORBISWEB',
+                    message: pnrOnly
+                        ? (retryResp.message || 'Sin proveedor no se pudo crear el servicio: se registró solo la línea de captura (PNR) en ORBISWEB. Asigna un proveedor válido para añadir el servicio.')
+                        : skipProvider
+                            ? 'La reserva se reenvió correctamente a ORBISWEB sin proveedor.'
+                            : `La reserva se reenvió correctamente a ORBISWEB con numIdProveedor=${retryResp.used_num_id_proveedor ?? providerId}.${expedienteSuffix}`,
                     hints: []
                 });
-                if (ui) showStatus(ui, 'Reserva reenviada correctamente a ORBISWEB.', 'success');
+                if (ui) showStatus(ui, pnrOnly ? 'PNR registrado en ORBISWEB (sin servicio).' : 'Reserva reenviada correctamente a ORBISWEB.', 'success');
                 return HANDLED_RETRY_OK;
             }
             attemptedProviderId = retryResp?.attempted_num_id_proveedor ?? providerId ?? attemptedProviderId;
@@ -4140,7 +4282,9 @@ function formatDateToYYYYMMDD(dateStr) {
 
 function shouldSetBspTrueFromFormaPago(formaPagoValue) {
     const normalized = String(formaPagoValue || '').trim().toLowerCase();
-    return normalized === 'bsp' || normalized === 'cash';
+    // BSP = true cuando es a crédito/CASH (acepta "BSP CASH", "CASH", "BSP").
+    // "Tarjeta de crédito" significa pagado al proveedor -> BSP false.
+    return normalized.includes('bsp') || normalized.includes('cash');
 }
 
 function updateBspVisualForReservation(index, reservationsData = null) {
@@ -4625,11 +4769,11 @@ function createFieldElement(fieldName, value, index, options = {}) {
         group.appendChild(switchLabel);
         return group;
 
-    } else if (fieldMeta.type === 'enum' || fieldName === 'tipo_residente' || fieldName === 'tipo_familia_numerosa' || fieldName === 'accion' || fieldName === 'accion_facturacion') {
+    } else if (fieldMeta.type === 'enum' || fieldName === 'tipo_residente' || fieldName === 'tipo_familia_numerosa' || fieldName === 'accion' || fieldName === 'accion_facturacion' || fieldName === 'forma_pago') {
         input = document.createElement('select');
         input.id = fieldId;
         input.name = fieldId;
-        
+
         let options = fieldMeta.options || [];
         // Fallback para selects técnicos si no vienen en el schema
         if (options.length === 0) {
@@ -4637,6 +4781,16 @@ function createFieldElement(fieldName, value, index, options = {}) {
             if (fieldName === 'tipo_familia_numerosa') options = ['', 'Sin descuento', 'Fam. numerosa general (5%)', 'Fam. numerosa especial (10%)'];
             if (fieldName === 'accion') options = ['solo_captura', 'volcar_expediente'];
             if (fieldName === 'accion_facturacion') options = ['ninguna', 'facturar_cliente', 'facturar_pasajeros'];
+            if (fieldName === 'forma_pago') {
+                // Desplegable de forma de pago (Tarjeta de crédito = pagado al
+                // proveedor; BSP CASH = a crédito -> activa BSP). Evita errores de
+                // escritura manual. Si la captura trajo otro valor, se conserva.
+                options = ['Tarjeta de crédito', 'BSP CASH'];
+                const curFp = String(value || '').trim();
+                if (curFp && !options.some(o => o.toLowerCase() === curFp.toLowerCase())) {
+                    options = [curFp, ...options];
+                }
+            }
         }
 
         options.forEach(opt => {
