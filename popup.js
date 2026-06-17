@@ -442,6 +442,174 @@ const observer = new ResizeObserver(entries => {
 
 observer.observe(document.body);
 
+// ════════════════════════════════════════════════════════════════════════
+//  EXPEDIENTES ORBISWEB — pestaña de histórico (solo si la integración activa)
+// ════════════════════════════════════════════════════════════════════════
+let orbisExpedientesLoaded = false;
+let orbisExpFilterTimer = null;
+
+function applyOrbisExpedientesTabVisibility() {
+    const btn = document.getElementById('expedientesTabBtn');
+    if (!btn) return;
+    btn.style.display = cachedOrbiswebStatus ? '' : 'none';
+    // Si se desactiva mientras estaba activa la pestaña, volvemos a Captura.
+    if (!cachedOrbiswebStatus && btn.classList.contains('active')) {
+        const capBtn = document.querySelector('.tab-btn[data-tab="captureContent"]');
+        if (capBtn) capBtn.click();
+    }
+}
+
+function _orbisEsc(str) {
+    return String(str == null ? '' : str).replace(/[&<>"']/g, s => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[s]
+    ));
+}
+
+function _orbisFmtDate(iso) {
+    if (!iso) return '';
+    try {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return String(iso);
+        return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch (e) { return String(iso); }
+}
+
+async function _orbisGetApiKey() {
+    const { userApiKey } = await chrome.storage.local.get('userApiKey');
+    return userApiKey || null;
+}
+
+function backToOrbisExpedientesList() {
+    const listView = document.getElementById('orbisExpedientesListView');
+    const detailView = document.getElementById('orbisExpedienteDetail');
+    if (detailView) detailView.style.display = 'none';
+    if (listView) listView.style.display = 'block';
+}
+
+function _renderOrbisExpedienteRow(e) {
+    const num = (e.num_id_expediente != null) ? e.num_id_expediente : '—';
+    const code = e.str_expediente ? ` · ${_orbisEsc(e.str_expediente)}` : '';
+    const titular = e.titular ? _orbisEsc(e.titular) : 'Sin titular';
+    const updated = e.updated_at ? _orbisFmtDate(e.updated_at) : '';
+    return `
+      <div class="orbis-exp-row" data-exp-id="${e.id}" data-exp-num="${_orbisEsc(num)}"
+           style="border:1px solid #e0e0e0; border-radius:6px; padding:10px; margin-bottom:8px; cursor:pointer; background:#fff;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+          <strong style="color:#0672ff; font-size:13px;">Expediente ${_orbisEsc(num)}${code}</strong>
+          <span style="color:#0672ff; font-size:12px; white-space:nowrap;">Ver servicios →</span>
+        </div>
+        <div style="font-size:12px; color:#555; margin-top:4px;">${titular}</div>
+        ${updated ? `<div style="font-size:11px; color:#999; margin-top:2px;">Actualizado en CapData: ${_orbisEsc(updated)}</div>` : ''}
+      </div>`;
+}
+
+// Renderiza un servicio LEÍDO EN VIVO de Orbis (forma mapeada por el backend).
+function _renderOrbisServicioRow(s) {
+    const desc = s.descripcion ? _orbisEsc(s.descripcion)
+        : (s.localizador ? `Reserva ${_orbisEsc(s.localizador)}` : 'Servicio');
+    const titular = s.titular ? _orbisEsc(s.titular) : '';
+    const prov = s.proveedor ? _orbisEsc(s.proveedor)
+        : (s.num_id_proveedor ? `Proveedor ${_orbisEsc(s.num_id_proveedor)}` : '');
+    const importe = (s.importe != null) ? `${_orbisEsc(s.importe)} ${_orbisEsc(s.divisa || 'EUR')}`.trim() : '';
+    const fecha = s.fecha_servicio ? _orbisEsc(s.fecha_servicio) : '';
+    const numServ = s.num_servicio ? `Servicio ${_orbisEsc(s.num_servicio)}` : '';
+    const anulado = !!s.anulado;
+    return `
+      <div style="border:1px solid #e8e8e8; border-radius:6px; padding:10px; margin-bottom:8px; background:${anulado ? '#fdf2f2' : '#fafafa'};">
+        <div style="display:flex; justify-content:space-between; gap:8px;">
+          <strong style="font-size:13px;${anulado ? ' text-decoration:line-through; color:#b91c1c;' : ''}">${desc}</strong>
+          ${importe ? `<span style="white-space:nowrap; font-size:12px; color:#333;">${importe}</span>` : ''}
+        </div>
+        ${titular ? `<div style="font-size:12px; color:#333; margin-top:3px;">👤 ${titular}</div>` : ''}
+        ${prov ? `<div style="font-size:12px; color:#555; margin-top:2px;">🏢 ${prov}</div>` : ''}
+        <div style="font-size:11px; color:#999; margin-top:5px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+          ${fecha ? `<span>📅 ${fecha}</span>` : ''}
+          ${numServ ? `<span>${numServ}</span>` : ''}
+          ${s.localizador ? `<span>Loc: ${_orbisEsc(s.localizador)}</span>` : ''}
+          ${s.billete ? `<span>Billete: ${_orbisEsc(s.billete)}</span>` : ''}
+          ${anulado ? `<span style="color:#b91c1c; font-weight:600;">ANULADO</span>` : ''}
+        </div>
+      </div>`;
+}
+
+async function loadOrbisExpedientes(query) {
+    const listEl = document.getElementById('orbisExpedientesList');
+    if (!listEl) return;
+    const apiKey = await _orbisGetApiKey();
+    if (!apiKey) {
+        listEl.innerHTML = '<p class="status-text">Guarda tu API Key para ver los expedientes.</p>';
+        return;
+    }
+    listEl.innerHTML = '<p class="status-text">Cargando expedientes...</p>';
+    let data;
+    try {
+        data = await chrome.runtime.sendMessage({ action: 'getOrbisExpedientes', apiKey, q: query || '' });
+    } catch (e) {
+        listEl.innerHTML = `<p class="status-text" style="color:#dc3545;">Error: ${_orbisEsc(e.message || e)}</p>`;
+        return;
+    }
+    if (!data || data.status !== 'success') {
+        listEl.innerHTML = `<p class="status-text" style="color:#dc3545;">${_orbisEsc((data && data.message) || 'No se pudieron cargar los expedientes.')}</p>`;
+        return;
+    }
+    const exps = data.expedientes || [];
+    orbisExpedientesLoaded = true;
+    if (!exps.length) {
+        listEl.innerHTML = '<p class="status-text">No hay expedientes registrados desde CapData todavía.</p>';
+        return;
+    }
+    listEl.innerHTML = exps.map(_renderOrbisExpedienteRow).join('');
+    listEl.querySelectorAll('[data-exp-id]').forEach(row => {
+        row.addEventListener('click', () => openOrbisExpedienteDetail(
+            row.getAttribute('data-exp-id'),
+            row.getAttribute('data-exp-num')
+        ));
+    });
+    notifySizeChange();
+}
+
+async function openOrbisExpedienteDetail(expId, expNum) {
+    const listView = document.getElementById('orbisExpedientesListView');
+    const detailView = document.getElementById('orbisExpedienteDetail');
+    const titleEl = document.getElementById('orbisExpedienteDetailTitle');
+    const servEl = document.getElementById('orbisExpedienteServiciosList');
+    if (!detailView || !servEl) return;
+    if (listView) listView.style.display = 'none';
+    detailView.style.display = 'block';
+    if (titleEl) titleEl.textContent = `Expediente ${expNum || ''}`.trim();
+    servEl.innerHTML = '<p class="status-text">Cargando servicios...</p>';
+    notifySizeChange();
+
+    const apiKey = await _orbisGetApiKey();
+    if (!apiKey) { servEl.innerHTML = '<p class="status-text">Guarda tu API Key.</p>'; return; }
+
+    let data;
+    try {
+        data = await chrome.runtime.sendMessage({ action: 'getOrbisExpedienteServicios', apiKey, expedienteId: expId });
+    } catch (e) {
+        servEl.innerHTML = `<p class="status-text" style="color:#dc3545;">Error: ${_orbisEsc(e.message || e)}</p>`;
+        return;
+    }
+    if (!data || data.status !== 'success') {
+        servEl.innerHTML = `<p class="status-text" style="color:#dc3545;">${_orbisEsc((data && data.message) || 'No se pudieron cargar los servicios.')}</p>`;
+        return;
+    }
+    const exp = data.expediente || {};
+    const servs = data.servicios || [];
+    if (titleEl) {
+        const n = (exp.num_id_expediente != null) ? exp.num_id_expediente : (expNum || '');
+        const code = exp.str_expediente ? ` (${exp.str_expediente})` : '';
+        titleEl.textContent = `Expediente ${n}${code} · ${servs.length} servicio${servs.length === 1 ? '' : 's'} en Orbis`;
+    }
+    if (!servs.length) {
+        servEl.innerHTML = '<p class="status-text">Este expediente no tiene servicios en Orbis.</p>';
+        notifySizeChange();
+        return;
+    }
+    servEl.innerHTML = servs.map(_renderOrbisServicioRow).join('');
+    notifySizeChange();
+}
+
 // --- INICIALIZACIÓN ---
 document.addEventListener('DOMContentLoaded', () => {
     // --- NUEVA LÓGICA PARA GESTIONAR PESTAÑAS ---
@@ -471,12 +639,43 @@ document.addEventListener('DOMContentLoaded', () => {
             if (targetPaneId === 'captureContent') {
                 updateServiceTypeVisibility();
             }
-            
+
+            // Al abrir Expedientes, mostrar la lista y cargarla la primera vez.
+            if (targetPaneId === 'expedientesContent') {
+                backToOrbisExpedientesList();
+                if (!orbisExpedientesLoaded) {
+                    loadOrbisExpedientes('');
+                }
+            }
+
             // Notificar el cambio de tamaño al cambiar de pestaña
-            notifySizeChange(); 
+            notifySizeChange();
         });
     });
     // --- FIN LÓGICA DE PESTAÑAS ---
+
+    // --- EXPEDIENTES ORBISWEB: wiring de la pestaña ---
+    const orbisExpRefreshBtn = document.getElementById('orbisExpRefreshBtn');
+    if (orbisExpRefreshBtn) {
+        orbisExpRefreshBtn.addEventListener('click', () => {
+            const q = (document.getElementById('orbisExpFilterInput') || {}).value || '';
+            loadOrbisExpedientes(q.trim());
+        });
+    }
+    const orbisExpBackBtn = document.getElementById('orbisExpBackBtn');
+    if (orbisExpBackBtn) {
+        orbisExpBackBtn.addEventListener('click', backToOrbisExpedientesList);
+    }
+    const orbisExpFilterInput = document.getElementById('orbisExpFilterInput');
+    if (orbisExpFilterInput) {
+        orbisExpFilterInput.addEventListener('input', () => {
+            if (orbisExpFilterTimer) clearTimeout(orbisExpFilterTimer);
+            orbisExpFilterTimer = setTimeout(() => {
+                loadOrbisExpedientes(orbisExpFilterInput.value.trim());
+                orbisExpFilterTimer = null;
+            }, 400);
+        });
+    }
 
     // --- NOTAS: cargar y guardar automáticamente ---
     const NOTES_STORAGE_KEY = 'capdata_notes';
@@ -1573,6 +1772,7 @@ async function initializeCaptureTab(ui) {
             
             const orbiswebResult = await checkOrbiswebStatus(userApiKey);
             cachedOrbiswebStatus = orbiswebResult.active;
+            applyOrbisExpedientesTabVisibility();
 
             await loadIntegrationVisibility(userApiKey);
             await loadIntegrationFieldVisibility(userApiKey);
@@ -1617,6 +1817,7 @@ async function initializeCaptureTab(ui) {
             
             const orbiswebResult = await checkOrbiswebStatus(userApiKey);
             cachedOrbiswebStatus = orbiswebResult.active;
+            applyOrbisExpedientesTabVisibility();
 
             await loadIntegrationVisibility(userApiKey);
             await loadIntegrationFieldVisibility(userApiKey);
@@ -2548,6 +2749,39 @@ function getActiveIntegrationSectionTitle(integrationName) {
     return `Campos específicos de ${integrationName}`;
 }
 
+// Autorrellena el NIF de cada pasajero buscándolo en CapData por NOMBRE. Si no
+// hay un match claro, deja el campo vacío (editable a mano). El NIF se envía a
+// Orbis como titular del servicio (evita el "JUAN MARTINEZ" por defecto que sale
+// cuando el NIF va vacío y Orbis enlaza al cliente #1).
+async function autofillPassengerNifs() {
+    try {
+        const stored = await chrome.storage.local.get('userApiKey');
+        const apiKey = stored && stored.userApiKey;
+        if (!apiKey) return;
+        const nifInputs = document.querySelectorAll('.pax-data-input[data-key="nif"]');
+        for (const nifInput of nifInputs) {
+            if ((nifInput.value || '').trim()) continue; // ya tiene NIF -> no tocar
+            const resIdx = nifInput.getAttribute('data-res-index');
+            const paxIdx = nifInput.getAttribute('data-pax-index');
+            const nameInput = document.querySelector(
+                `.pax-data-input[data-key="nombre_pax"][data-res-index="${resIdx}"][data-pax-index="${paxIdx}"]`
+            );
+            const name = nameInput ? (nameInput.value || '').trim() : '';
+            if (!name) continue;
+            try {
+                const resp = await chrome.runtime.sendMessage({ action: 'lookupPassengerNif', apiKey, name });
+                if (resp && resp.status === 'success' && resp.nif && !(nifInput.value || '').trim()) {
+                    nifInput.value = resp.nif;
+                    // 'change' (no 'input'): la sincronización de pasajeros a
+                    // savedReservationData escucha 'change'; con 'input' el NIF se veía
+                    // pero NO se guardaba/enviaba.
+                    nifInput.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            } catch (e) { /* silencioso */ }
+        }
+    } catch (e) { /* silencioso */ }
+}
+
 function buildMultiEditableForm(ui, reservationsData) {
     // 1. Limpiar el contenedor de cualquier formulario anterior.
     closeActiveCustomSelectDropdown();
@@ -2953,6 +3187,12 @@ function buildMultiEditableForm(ui, reservationsData) {
 
     if (typeof notifySizeChange === 'function') {
         notifySizeChange();
+    }
+
+    // Autorrelleno del NIF de los pasajeros desde CapData (por nombre), para que
+    // Orbis identifique correctamente al titular del servicio.
+    if (typeof autofillPassengerNifs === 'function') {
+        autofillPassengerNifs();
     }
 }
 
@@ -3697,7 +3937,7 @@ function showOrbisProviderRetryModal({
     });
 }
 
-async function performOrbisRetrySend({ requestLogId, providerId = null, skipProvider = false, createExpediente = false, nif = null, apiKey, employeeToken = null }) {
+async function performOrbisRetrySend({ requestLogId, providerId = null, skipProvider = false, createExpediente = false, nif = null, pnrOnly = false, apiKey, employeeToken = null }) {
     if (!requestLogId) {
         return { status: 'error', message: 'Falta request_log_id para reintentar.' };
     }
@@ -3713,6 +3953,7 @@ async function performOrbisRetrySend({ requestLogId, providerId = null, skipProv
             body.num_id_proveedor = providerId;
         }
         if (createExpediente) body.create_expediente = true;
+        if (pnrOnly) body.pnr_only = true;
         if (nif) body.nif = nif;
         const headers = { 'Content-Type': 'application/json' };
         if (apiKey) headers['X-API-Key'] = apiKey;
@@ -3768,12 +4009,17 @@ function showOrbisNifPromptModal({ message, previousError = '' } = {}) {
         rowBtns.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
         const cancel = document.createElement('button');
         cancel.type = 'button'; cancel.textContent = 'Cancelar';
-        cancel.style.cssText = 'padding:8px 12px;border:1px solid #d1d5db;background:#fff;border-radius:6px;cursor:pointer;';
+        cancel.style.cssText = 'padding:8px 12px;border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:6px;cursor:pointer;';
         const ok = document.createElement('button');
         ok.type = 'button'; ok.textContent = 'Enviar con este NIF';
         ok.style.cssText = 'padding:8px 12px;border:none;background:#2563eb;color:#fff;border-radius:6px;cursor:pointer;';
+        const pnrBtn = document.createElement('button');
+        pnrBtn.type = 'button'; pnrBtn.textContent = 'Continuar solo PNR';
+        pnrBtn.title = 'Sin NIF no se puede crear servicio/expediente: registra solo la línea PNR en Orbis';
+        pnrBtn.style.cssText = 'padding:8px 12px;border:1px solid #f59e0b;background:#fffbeb;color:#92400e;border-radius:6px;cursor:pointer;';
         const close = (val) => { try { document.body.removeChild(overlay); } catch (_) {} resolve(val); };
         cancel.addEventListener('click', () => close(null));
+        pnrBtn.addEventListener('click', () => close({ pnrOnly: true }));
         ok.addEventListener('click', () => {
             const v = input.value.trim();
             if (v) close(v); else { err.textContent = 'Introduce un NIF.'; }
@@ -3783,7 +4029,7 @@ function showOrbisNifPromptModal({ message, previousError = '' } = {}) {
             if (e.key === 'Escape') close(null);
         });
         overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
-        rowBtns.appendChild(cancel); rowBtns.appendChild(ok);
+        rowBtns.appendChild(cancel); rowBtns.appendChild(pnrBtn); rowBtns.appendChild(ok);
         modal.appendChild(title); modal.appendChild(msg); modal.appendChild(input); modal.appendChild(err); modal.appendChild(rowBtns);
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
@@ -3857,12 +4103,31 @@ async function showFriendlyOrbisErrorModal(responseOrMessage, context = {}) {
         } catch (_) { employeeToken = null; }
         let prevErr = '';
         while (true) {
-            const nif = await showOrbisNifPromptModal({
-                message: (text || 'Orbis necesita el NIF del viajero para crear el servicio.')
+            const result = await showOrbisNifPromptModal({
+                message: (text || 'Orbis necesita el NIF del viajero para crear el servicio/expediente.')
+                    + '\n\nSin NIF no se puede crear servicio ni expediente: puedes continuar registrando solo la línea PNR.'
                     + (savedNote ? '\n\n' + savedNote : ''),
                 previousError: prevErr,
             });
-            if (!nif) return HANDLED_CANCELLED;
+            if (!result) return HANDLED_CANCELLED;
+            // "Continuar solo PNR": registrar solo la línea PNR (sin servicio/expediente).
+            if (typeof result === 'object' && result.pnrOnly) {
+                if (ui) showStatus(ui, 'Registrando solo la línea PNR en ORBISWEB...', 'info');
+                const pnrResp = await performOrbisRetrySend({ requestLogId, pnrOnly: true, apiKey, employeeToken });
+                if (pnrResp?.status === 'ok') {
+                    markSaveProgressRetrySucceeded('PNR registrado en ORBISWEB (sin servicio: falta NIF).');
+                    showCompactInfoModal({
+                        title: 'PNR registrado (sin servicio)',
+                        message: pnrResp.message || 'Sin NIF no se pudo crear servicio/expediente: se registró solo la línea PNR en ORBISWEB.',
+                        hints: []
+                    });
+                    if (ui) showStatus(ui, 'PNR registrado en ORBISWEB (sin servicio).', 'success');
+                    return HANDLED_RETRY_OK;
+                }
+                prevErr = pnrResp?.message || 'No se pudo registrar la línea PNR.';
+                continue;
+            }
+            const nif = result;
             if (ui) showStatus(ui, 'Reenviando a ORBISWEB con el NIF...', 'info');
             const retryResp = await performOrbisRetrySend({ requestLogId, nif, apiKey, employeeToken });
             if (retryResp?.status === 'ok') {
@@ -3892,28 +4157,29 @@ async function showFriendlyOrbisErrorModal(responseOrMessage, context = {}) {
         let retryWithProviderLabel;
         let skipLabel;
         if (expedienteAlreadyCreated) {
-            retryTitle = 'Falta código de proveedor en Orbis';
-            baseMessage = `Orbis rechazó el proveedor${providerSuffix}, por eso la reserva no se envió a ese expediente.\n\n`
-                + 'Introduce un numIdProveedor válido para enviar la reserva a ese expediente, '
-                + 'o envíala sin proveedor.';
-            retryWithProviderLabel = 'Enviar con este proveedor';
-            skipLabel = 'Enviar sin proveedor';
+            retryTitle = 'Falta proveedor para el servicio';
+            baseMessage = `Orbis rechazó el proveedor${providerSuffix}, por eso el servicio no se añadió al expediente.\n\n`
+                + 'Sin proveedor NO se puede crear el servicio. Introduce un numIdProveedor válido '
+                + 'para añadir el servicio al expediente, o continúa sin proveedor: se registrará '
+                + 'solo la línea PNR en Orbis (sin servicio).';
+            retryWithProviderLabel = 'Añadir servicio con este proveedor';
+            skipLabel = 'Continuar sin proveedor (solo PNR)';
         } else if (expedienteAttempted) {
-            retryTitle = 'No se pudo crear el expediente en Orbis';
+            retryTitle = 'Falta proveedor para crear el expediente';
             baseMessage = `No se pudo crear el expediente en ORBISWEB${providerSuffix}.\n\n`
-                + 'Introduce el ID correcto del proveedor en Orbis y reintentamos creando el expediente. '
-                + 'También puedes crear el expediente sin proveedor.';
+                + 'Sin proveedor NO se puede crear el expediente ni el servicio. '
+                + 'Introduce el numIdProveedor de Orbis y reintentamos creándolo, '
+                + 'o continúa sin proveedor: se registrará solo la línea PNR en Orbis (sin expediente ni servicio).';
             retryWithProviderLabel = 'Reintentar y crear expediente';
-            // En el flujo expediente, el skip significa "crear expediente SIN proveedor"
-            // (el usuario ya decidió que quiere expediente, así que no se omite).
-            skipLabel = 'Crear expediente sin proveedor';
+            // "Continuar sin proveedor" -> NO se crea expediente ni servicio; solo PNR.
+            skipLabel = 'Continuar sin proveedor (solo PNR)';
         } else {
             retryTitle = 'No se envió la reserva a Orbis';
             baseMessage = `ORBISWEB rechazó el envío${providerSuffix}.\n\n`
-                + 'Si conoces el ID correcto del proveedor en Orbis, introdúcelo abajo y reintentamos. '
-                + 'También puedes enviar la reserva sin proveedor.';
+                + 'Si conoces el numIdProveedor de Orbis, introdúcelo abajo y reintentamos. '
+                + 'O continúa sin proveedor: se registrará solo la línea PNR en Orbis (sin servicio).';
             retryWithProviderLabel = 'Reintentar con este proveedor';
-            skipLabel = 'Enviar sin proveedor';
+            skipLabel = 'Continuar sin proveedor (solo PNR)';
         }
 
         let employeeToken = null;
@@ -3944,9 +4210,9 @@ async function showFriendlyOrbisErrorModal(responseOrMessage, context = {}) {
             }
             const skipProvider = choice.action === 'retry-without-provider';
             const providerId = choice.action === 'retry-with-provider' ? choice.providerId : null;
-            // Si el usuario quiso crear expediente originalmente, lo seguimos creando
-            // en todos los reintentos (con o sin proveedor).
-            const createExp = expedienteAttempted;
+            // Si el usuario quiso crear expediente, lo seguimos intentando SOLO si hay
+            // proveedor: "continuar sin proveedor" no crea expediente ni servicio (solo PNR).
+            const createExp = expedienteAttempted && !skipProvider;
 
             if (ui) showStatus(ui, 'Reintentando envío a ORBISWEB...', 'info');
             const retryResp = await performOrbisRetrySend({
@@ -4680,6 +4946,15 @@ function createFieldElement(fieldName, value, index, options = {}) {
                     </div>
                 </div>
 
+                <!-- NIF / Documento (autorrellenado por nombre desde CapData; editable) -->
+                <div class="passenger-grid">
+                    <div class="passenger-field-block">
+                        <label class="passenger-field-label">NIF / Documento:</label>
+                        <input type="text" class="pax-data-input passenger-field-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="nif" value="${pax.nif || pax.documento || pax.dni || ''}" placeholder="NIF del pasajero">
+                    </div>
+                    <div class="passenger-field-spacer" aria-hidden="true"></div>
+                </div>
+
                 <!-- Nº Billete + Residente Fam Numerosa -->
                 <div class="passenger-grid">
                     <div class="passenger-field-block">
@@ -5056,6 +5331,21 @@ async function collectSingleFieldData(index) {
             } else if (Object.prototype.hasOwnProperty.call(passengerData, 'num_billete')) {
                 passengerData.num_billete = normalizeTicketNumberValue(passengerData.num_billete);
             }
+            // El FORMULARIO manda: re-leemos los inputs visibles del pasajero (NIF,
+            // nombre, etc.). Si el usuario los borra o cambia, se envía lo que hay en
+            // el campo AHORA, no el dato sincronizado antiguo. (Antes el NIF borrado
+            // se enviaba igual porque solo se leía savedReservationData.)
+            document.querySelectorAll(
+                `.pax-data-input[data-res-index="${index}"][data-pax-index="${paxIndex}"]`
+            ).forEach(inp => {
+                const key = inp.getAttribute('data-key');
+                if (!key || key === 'num_billete') return;
+                if (key === 'residente_fam_numerosa' || key === 'is_residente' || key === 'is_familia_numerosa') {
+                    passengerData[key] = (inp.value === 'true');
+                } else {
+                    passengerData[key] = (inp.value || '').trim();
+                }
+            });
             return passengerData;
         });
     } else {

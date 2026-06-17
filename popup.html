@@ -469,6 +469,7 @@
     <button class="tab-btn" data-tab="fillContent">Contactos</button>
     <button class="tab-btn active" data-tab="captureContent">Captura</button>
     <button class="tab-btn" data-tab="notesContent">Notas</button>
+    <button class="tab-btn" id="expedientesTabBtn" data-tab="expedientesContent" style="display:none;">Expedientes</button>
   </div>
 
   <!-- CONTENEDOR DE PANELES -->
@@ -567,6 +568,33 @@
     <!-- PESTAÑA 3: NOTAS -->
     <div id="notesContent" class="tab-pane">
       <textarea id="notesTextarea" placeholder="Escribe aquí tus notas mientras interactúas con la web..."></textarea>
+    </div>
+
+    <!-- PESTAÑA EXPEDIENTES ORBISWEB (solo visible si la integración está activa) -->
+    <div id="expedientesContent" class="tab-pane">
+      <!-- Vista LISTA de expedientes -->
+      <div id="orbisExpedientesListView">
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
+          <input type="text" id="orbisExpFilterInput" placeholder="Buscar nº expediente, titular, localizador..."
+                 style="flex:1; padding:8px; border:1px solid #ccc; border-radius:4px;">
+          <button id="orbisExpRefreshBtn" title="Recargar expedientes"
+                  style="padding:8px 12px; background:#0672ff; color:#fff; border:none; border-radius:4px; cursor:pointer; font-weight:bold;">↻</button>
+        </div>
+        <div id="orbisExpedientesList">
+          <p class="status-text">Cargando expedientes...</p>
+        </div>
+      </div>
+      <!-- Vista DETALLE: servicios de un expediente -->
+      <div id="orbisExpedienteDetail" style="display:none;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:8px;">
+          <h3 id="orbisExpedienteDetailTitle" style="margin:0; font-size:15px; color:#0672ff;">Expediente</h3>
+          <button id="orbisExpBackBtn"
+                  style="padding:4px 8px; background:#eee; border:1px solid #ccc; border-radius:4px; cursor:pointer; white-space:nowrap;">← Volver</button>
+        </div>
+        <div id="orbisExpedienteServiciosList">
+          <p class="status-text">Cargando servicios...</p>
+        </div>
+      </div>
     </div>
 
   </div>

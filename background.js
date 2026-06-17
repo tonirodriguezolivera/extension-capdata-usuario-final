@@ -1562,6 +1562,64 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 
   /* ════════════════════════════════════════════════════════════════════════
+   *  C.2) EXPEDIENTES ORBISWEB  →  /api/me/orbis/expedientes
+   * ════════════════════════════════════════════════════════════════════════ */
+  else if (request.action === 'getOrbisExpedientes') {
+    const { apiKey, q, page, perPage } = request;
+    if (!apiKey) { sendResponse({ status: 'error', message: "No se proporcionó API Key." }); return true; }
+
+    const url = new URL(`${API_BASE_URL}/api/me/orbis/expedientes`);
+    if (q) url.searchParams.set('q', q);
+    if (page) url.searchParams.set('page', page);
+    if (perPage) url.searchParams.set('per_page', perPage);
+
+    fetch(url.toString(), { method: 'GET', headers: { 'X-API-Key': apiKey } })
+      .then(response => response.json())
+      .then(data => sendResponse(data))
+      .catch(err => {
+        console.error("❌ Error al cargar expedientes ORBISWEB:", err);
+        sendResponse({ status: 'error', message: "Error al cargar expedientes: " + err.toString() });
+      });
+    return true; // Respuesta asíncrona
+  }
+
+  else if (request.action === 'getOrbisExpedienteServicios') {
+    const { apiKey, expedienteId, live } = request;
+    if (!apiKey) { sendResponse({ status: 'error', message: "No se proporcionó API Key." }); return true; }
+    if (!expedienteId) { sendResponse({ status: 'error', message: "Falta expedienteId." }); return true; }
+
+    const url = new URL(`${API_BASE_URL}/api/me/orbis/expedientes/${encodeURIComponent(expedienteId)}/servicios`);
+    if (live) url.searchParams.set('live', '1');
+
+    fetch(url.toString(), { method: 'GET', headers: { 'X-API-Key': apiKey } })
+      .then(response => response.json())
+      .then(data => sendResponse(data))
+      .catch(err => {
+        console.error("❌ Error al cargar servicios del expediente ORBISWEB:", err);
+        sendResponse({ status: 'error', message: "Error al cargar servicios: " + err.toString() });
+      });
+    return true; // Respuesta asíncrona
+  }
+
+  /* ════════════════════════════════════════════════════════════════════════
+   *  C.3) NIF DEL PASAJERO POR NOMBRE  →  /api/contacts/lookup-nif
+   * ════════════════════════════════════════════════════════════════════════ */
+  else if (request.action === 'lookupPassengerNif') {
+    const { apiKey, name } = request;
+    if (!apiKey || !name) { sendResponse({ status: 'success', nif: null, match: 'empty' }); return true; }
+
+    const url = new URL(`${API_BASE_URL}/api/contacts/lookup-nif`);
+    url.searchParams.set('name', name);
+
+    fetch(url.toString(), { method: 'GET', headers: { 'X-API-Key': apiKey } })
+      .then(response => response.json())
+      .then(data => sendResponse(data))
+      .catch(err => sendResponse({ status: 'error', message: "Error al buscar NIF: " + err.toString() }));
+    return true; // Respuesta asíncrona
+  }
+
+
+  /* ════════════════════════════════════════════════════════════════════════
    *  D) ENVIAR A CLIENTIFY  →  /api/sendToClientify
    * ════════════════════════════════════════════════════════════════════════ */
   else if (request.action === 'sendToClientify') {
