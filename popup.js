@@ -475,6 +475,11 @@ function _orbisFmtDate(iso) {
 }
 
 async function _orbisGetApiKey() {
+    // Preferimos el valor "vivo" del campo de la API Key (lo que usa el flujo de
+    // captura/guardado). Solo si está vacío caemos al valor guardado en storage
+    // (que únicamente se rellena al pulsar "Guardar API Key").
+    const fromInput = (document.getElementById('apiKey')?.value || '').trim();
+    if (fromInput) return fromInput;
     const { userApiKey } = await chrome.storage.local.get('userApiKey');
     return userApiKey || null;
 }
@@ -2749,36 +2754,80 @@ function getActiveIntegrationSectionTitle(integrationName) {
     return `Campos específicos de ${integrationName}`;
 }
 
-// Autorrellena el NIF de cada pasajero buscándolo en CapData por NOMBRE. Si no
-// hay un match claro, deja el campo vacío (editable a mano). El NIF se envía a
-// Orbis como titular del servicio (evita el "JUAN MARTINEZ" por defecto que sale
-// cuando el NIF va vacío y Orbis enlaza al cliente #1).
+// Spinner DENTRO de un input mientras se busca su NIF en CapData. Envuelve el input
+// en un contenedor relativo y añade el spinner a la derecha. Devuelve cleanup().
+function _attachNifSpinner(input) {
+    try {
+        if (!document.getElementById('orbis-spin-style')) {
+            const st = document.createElement('style');
+            st.id = 'orbis-spin-style';
+            st.textContent = '@keyframes orbisspin{from{transform:translateY(-50%) rotate(0deg)}to{transform:translateY(-50%) rotate(360deg)}}';
+            (document.head || document.documentElement).appendChild(st);
+        }
+        let wrap = input.parentElement;
+        if (!wrap || !wrap.classList || !wrap.classList.contains('nif-spin-wrap')) {
+            wrap = document.createElement('div');
+            wrap.className = 'nif-spin-wrap';
+            wrap.style.cssText = 'position:relative;';
+            input.parentNode.insertBefore(wrap, input);
+            wrap.appendChild(input);
+        }
+        const sp = document.createElement('div');
+        sp.style.cssText = 'position:absolute;right:9px;top:50%;width:13px;height:13px;border:2px solid #d1d5db;border-top-color:#2563eb;border-radius:50%;animation:orbisspin .8s linear infinite;pointer-events:none;';
+        wrap.appendChild(sp);
+        const prevPad = input.style.paddingRight;
+        input.style.paddingRight = '28px';
+        return () => { try { sp.remove(); input.style.paddingRight = prevPad; } catch (_) {} };
+    } catch (_) { return () => {}; }
+}
+
+// Autorrellena el NIF de cada pasajero buscándolo en CapData por NOMBRE, con
+// feedback: spinner mientras busca; si llega lo pinta; si no, lo deja vacío con un
+// placeholder indicando que no está en CapData. El NIF se envía a Orbis como titular
+// del servicio (evita el "JUAN MARTINEZ" por defecto cuando va vacío).
 async function autofillPassengerNifs() {
     try {
-        const stored = await chrome.storage.local.get('userApiKey');
-        const apiKey = stored && stored.userApiKey;
+        const apiKey = await _orbisGetApiKey();
         if (!apiKey) return;
-        const nifInputs = document.querySelectorAll('.pax-data-input[data-key="nif"]');
-        for (const nifInput of nifInputs) {
-            if ((nifInput.value || '').trim()) continue; // ya tiene NIF -> no tocar
+        const nifInputs = Array.from(document.querySelectorAll('.pax-data-input[data-key="nif"]'));
+
+        const lookupOne = async (nifInput) => {
             const resIdx = nifInput.getAttribute('data-res-index');
             const paxIdx = nifInput.getAttribute('data-pax-index');
             const nameInput = document.querySelector(
                 `.pax-data-input[data-key="nombre_pax"][data-res-index="${resIdx}"][data-pax-index="${paxIdx}"]`
             );
             const name = nameInput ? (nameInput.value || '').trim() : '';
-            if (!name) continue;
+            if (!name) return;
+            const cleanup = _attachNifSpinner(nifInput);
+            const prevPlaceholder = nifInput.placeholder;
+            nifInput.placeholder = 'Buscando NIF en CapData…';
+            // Duración mínima del spinner para que sea VISIBLE (el lookup local es rapidísimo).
+            const minDelay = new Promise((r) => setTimeout(r, 650));
             try {
                 const resp = await chrome.runtime.sendMessage({ action: 'lookupPassengerNif', apiKey, name });
+                await minDelay;
                 if (resp && resp.status === 'success' && resp.nif && !(nifInput.value || '').trim()) {
                     nifInput.value = resp.nif;
+                    nifInput.placeholder = prevPlaceholder;
                     // 'change' (no 'input'): la sincronización de pasajeros a
-                    // savedReservationData escucha 'change'; con 'input' el NIF se veía
-                    // pero NO se guardaba/enviaba.
+                    // savedReservationData escucha 'change'; con 'input' no se guarda.
                     nifInput.dispatchEvent(new Event('change', { bubbles: true }));
+                } else if (!(nifInput.value || '').trim()) {
+                    nifInput.placeholder = 'Sin NIF en CapData — escríbelo a mano';
                 }
-            } catch (e) { /* silencioso */ }
-        }
+            } catch (e) {
+                await minDelay;
+                nifInput.placeholder = prevPlaceholder;
+            } finally {
+                cleanup();
+            }
+        };
+
+        // En paralelo: todos los pasajeros sin NIF muestran spinner a la vez.
+        await Promise.all(
+            nifInputs.filter((inp) => !(inp.value || '').trim()).map((inp) => lookupOne(inp))
+        );
     } catch (e) { /* silencioso */ }
 }
 
@@ -3637,24 +3686,27 @@ async function applyOrbisExpedienteCreationChoice(reservationsToSave) {
 
     if (missingExpedienteIndexes.length === 0) return;
 
-    const askTitle = 'Crear expediente en Orbis Web';
-    const askMessage = missingExpedienteIndexes.length === 1
-        ? 'La reserva no tiene expediente. ¿Deseas crear un expediente nuevo en Orbis Web al guardar?'
-        : `Hay ${missingExpedienteIndexes.length} reservas sin expediente. ¿Deseas crear expediente nuevo en Orbis Web para ellas al guardar?`;
-    const createExpediente = await showCompactChoiceModal({
-        title: askTitle,
-        message: askMessage,
-        confirmText: 'Sí, crear',
-        cancelText: 'No crear'
-    });
-
-    // null = el usuario cerró el popup (X / overlay / Escape) sin decidir → abortar guardado.
-    if (createExpediente === null) {
-        return { aborted: true };
-    }
-
-    missingExpedienteIndexes.forEach((idx) => {
+    const totalMissing = missingExpedienteIndexes.length;
+    let position = 0;
+    // Preguntamos por reserva: si tiene >1 pasajero, el modal incluye el desplegable
+    // para elegir el titular del expediente (un servicio por pasajero con billete).
+    for (const idx of missingExpedienteIndexes) {
+        position += 1;
         const reservation = reservationsToSave[idx] || {};
+        const pasajeros = Array.isArray(reservation.pasajeros)
+            ? reservation.pasajeros.filter(p => p && typeof p === 'object')
+            : [];
+        const prefix = totalMissing > 1 ? `Reserva ${position}/${totalMissing}. ` : '';
+        const message = pasajeros.length > 1
+            ? `${prefix}La reserva tiene ${pasajeros.length} pasajeros. Se creará un servicio por pasajero con billete dentro del mismo expediente. Elige el titular del expediente y confirma para crearlo en Orbis Web.`
+            : `${prefix}La reserva no tiene expediente. ¿Deseas crear un expediente nuevo en Orbis Web al guardar?`;
+
+        const choice = await showOrbisExpedienteTitularModal({ message, pasajeros });
+        // null = cerró sin decidir (X / overlay / Escape) → abortar TODO el guardado.
+        if (choice === null) {
+            return { aborted: true };
+        }
+        const createExpediente = !!(choice && choice.create);
         const nextAccion = createExpediente ? 'volcar_expediente' : 'solo_captura';
         reservation.accion = nextAccion;
         const automation = (reservation.reservation_automation && typeof reservation.reservation_automation === 'object')
@@ -3662,8 +3714,13 @@ async function applyOrbisExpedienteCreationChoice(reservationsToSave) {
             : {};
         automation.accion = nextAccion;
         reservation.reservation_automation = automation;
+        if (createExpediente && choice.titular) {
+            reservation.orbis_expediente_titular = choice.titular;
+        } else if (reservation.orbis_expediente_titular) {
+            delete reservation.orbis_expediente_titular;
+        }
         reservationsToSave[idx] = reservation;
-    });
+    }
     return { aborted: false };
 }
 
@@ -3733,6 +3790,243 @@ function showCompactChoiceModal({ title, message, confirmText = 'Aceptar', cance
         modal.appendChild(closeX);
         modal.appendChild(h);
         modal.appendChild(p);
+        modal.appendChild(actions);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+    });
+}
+
+// Modal de "crear expediente" CON selección de titular cuando hay >1 pasajero.
+// Devuelve:
+//   null                                  -> cerrado sin decidir (abortar guardado)
+//   { create: false }                     -> "No crear"
+//   { create: true, titular: null|{...} } -> "Sí, crear" (+ titular elegido)
+function showOrbisExpedienteTitularModal({ message, pasajeros = [], confirmText = 'Sí, crear', cancelText = 'No crear' }) {
+    const paxList = Array.isArray(pasajeros) ? pasajeros.filter(p => p && typeof p === 'object') : [];
+    const paxName = (p) => {
+        const parts = [
+            String(p.nombre_pax || p.nombre || '').trim(),
+            String(p.primer_apellido_pax || p.primer_apellidos_pax || p.apellido1 || '').trim(),
+            String(p.segundo_apellido_pax || p.apellido2 || '').trim(),
+        ];
+        return parts.filter(Boolean).join(' ').trim();
+    };
+    const paxNif = (p) => String(p.nif || p.documento || p.dni || p.pasaporte_numero || '').trim();
+    const multi = paxList.length > 1;
+
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.45);display:flex;align-items:center;justify-content:center;z-index:10050;padding:12px;';
+        const modal = document.createElement('div');
+        modal.style.cssText = 'position:relative;width:min(440px,95vw);background:#fff;border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,0.2);padding:14px 14px 12px 14px;font-family:Arial,sans-serif;';
+
+        const closeX = document.createElement('button');
+        closeX.type = 'button';
+        closeX.setAttribute('aria-label', 'Cerrar');
+        closeX.innerHTML = '&times;';
+        closeX.style.cssText = 'position:absolute;top:6px;right:8px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;background:transparent;border:none;color:#6b7280;font-size:20px;line-height:1;cursor:pointer;padding:0;border-radius:4px;';
+
+        const h = document.createElement('div');
+        h.textContent = 'Crear expediente en Orbis Web';
+        h.style.cssText = 'font-size:15px;font-weight:700;color:#111827;margin-bottom:8px;padding-right:24px;';
+
+        const p = document.createElement('div');
+        p.textContent = message || '';
+        p.style.cssText = 'font-size:13px;line-height:1.4;color:#374151;margin-bottom:12px;';
+
+        // --- Selección de titular (solo si hay >1 pasajero) ---
+        const titularWrap = document.createElement('div');
+        let select = null, otroNombre = null, nifInput = null, errEl = null;
+        if (multi) {
+            titularWrap.style.cssText = 'margin-bottom:12px;display:flex;flex-direction:column;gap:6px;';
+            const lbl = document.createElement('label');
+            lbl.textContent = 'Titular del expediente';
+            lbl.style.cssText = 'font-size:12px;font-weight:600;color:#111827;';
+            select = document.createElement('select');
+            select.style.cssText = 'width:100%;box-sizing:border-box;padding:7px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;';
+            paxList.forEach((pax, i) => {
+                const opt = document.createElement('option');
+                opt.value = String(i);
+                const nm = paxName(pax) || `Pasajero ${i + 1}`;
+                opt.textContent = paxNif(pax) ? nm : `${nm} (sin NIF)`;
+                select.appendChild(opt);
+            });
+            const optOtro = document.createElement('option');
+            optOtro.value = '__otro__';
+            optOtro.textContent = 'Otro contacto…';
+            select.appendChild(optOtro);
+            const firstWithNif = paxList.findIndex(pp => paxNif(pp));
+            select.value = String(firstWithNif >= 0 ? firstWithNif : 0);
+
+            otroNombre = document.createElement('input');
+            otroNombre.type = 'text';
+            otroNombre.placeholder = 'Nombre del titular';
+            otroNombre.style.cssText = 'width:100%;box-sizing:border-box;padding:7px 30px 7px 7px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;';
+            // Spinner DENTRO del input mientras busca el NIF (keyframes propio para no
+            // depender del CSS de la página).
+            if (!document.getElementById('orbis-spin-style')) {
+                const _st = document.createElement('style');
+                _st.id = 'orbis-spin-style';
+                _st.textContent = '@keyframes orbisspin{from{transform:translateY(-50%) rotate(0deg)}to{transform:translateY(-50%) rotate(360deg)}}';
+                (document.head || document.documentElement).appendChild(_st);
+            }
+            const otroNombreWrap = document.createElement('div');
+            otroNombreWrap.style.cssText = 'position:relative;display:none;';
+            const otroSpinner = document.createElement('div');
+            otroSpinner.style.cssText = 'position:absolute;right:9px;top:50%;width:14px;height:14px;border:2px solid #d1d5db;border-top-color:#2563eb;border-radius:50%;display:none;animation:orbisspin 0.8s linear infinite;';
+            otroNombreWrap.appendChild(otroNombre);
+            otroNombreWrap.appendChild(otroSpinner);
+
+            const nifLbl = document.createElement('label');
+            nifLbl.textContent = 'NIF del titular';
+            nifLbl.style.cssText = 'font-size:12px;font-weight:600;color:#111827;margin-top:2px;';
+            nifInput = document.createElement('input');
+            nifInput.type = 'text';
+            nifInput.placeholder = 'NIF / CIF del titular';
+            nifInput.style.cssText = 'width:100%;box-sizing:border-box;padding:7px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;';
+
+            const otroStatus = document.createElement('div');
+            otroStatus.style.cssText = 'font-size:11px;color:#6b7280;min-height:13px;';
+
+            errEl = document.createElement('div');
+            errEl.style.cssText = 'color:#b91c1c;font-size:12px;min-height:14px;';
+
+            const syncFromSelect = () => {
+                if (select.value === '__otro__') {
+                    otroNombreWrap.style.display = 'block';
+                    nifInput.value = '';
+                    otroStatus.textContent = '';
+                    setTimeout(() => otroNombre.focus(), 30);
+                } else {
+                    otroNombreWrap.style.display = 'none';
+                    otroStatus.textContent = '';
+                    const pax = paxList[parseInt(select.value, 10)] || {};
+                    nifInput.value = paxNif(pax);
+                }
+                errEl.textContent = '';
+            };
+            select.addEventListener('change', syncFromSelect);
+
+            // Búsqueda automática del NIF en CapData por NOMBRE (match exacto):
+            // spinner dentro del input + mensaje según el resultado.
+            let otroLookupSeq = 0;
+            const runOtroLookup = async (name) => {
+                const seq = ++otroLookupSeq;
+                otroSpinner.style.display = 'block';
+                otroStatus.style.color = '#6b7280';
+                otroStatus.textContent = 'Buscando DNI en CapData…';
+                let resp = null;
+                try {
+                    const apiKey = await _orbisGetApiKey();
+                    if (!apiKey) {
+                        if (seq === otroLookupSeq) { otroSpinner.style.display = 'none'; otroStatus.style.color = '#b91c1c'; otroStatus.textContent = 'Falta la API Key.'; }
+                        return;
+                    }
+                    resp = await Promise.race([
+                        chrome.runtime.sendMessage({ action: 'lookupPassengerNif', apiKey, name }),
+                        new Promise((res) => setTimeout(() => res({ status: 'timeout' }), 12000)),
+                    ]);
+                } catch (_) { resp = { status: 'error' }; }
+                if (seq !== otroLookupSeq) return; // ya hay una búsqueda más reciente
+                otroSpinner.style.display = 'none';
+                if (resp && resp.status === 'success' && resp.nif) {
+                    nifInput.value = resp.nif;
+                    otroStatus.style.color = '#15803d';
+                    otroStatus.textContent = '✓ NIF encontrado en CapData.';
+                } else if (resp && resp.status === 'timeout') {
+                    otroStatus.style.color = '#b91c1c';
+                    otroStatus.textContent = 'La búsqueda tardó demasiado; escribe el NIF manualmente.';
+                } else {
+                    otroStatus.style.color = '#92400e';
+                    otroStatus.textContent = 'No tenemos el NIF en CapData; escríbelo manualmente.';
+                }
+            };
+            otroNombre.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); const n = otroNombre.value.trim(); if (n) runOtroLookup(n); }
+            });
+            let otroTimer = null;
+            otroNombre.addEventListener('input', () => {
+                otroStatus.textContent = '';
+                otroSpinner.style.display = 'none';
+                otroLookupSeq++; // invalida cualquier búsqueda en curso
+                if (otroTimer) clearTimeout(otroTimer);
+                const n = otroNombre.value.trim();
+                if (!n) return;
+                otroTimer = setTimeout(() => { if (!nifInput.value.trim()) runOtroLookup(n); }, 600);
+            });
+
+            titularWrap.appendChild(lbl);
+            titularWrap.appendChild(select);
+            titularWrap.appendChild(otroNombreWrap);
+            titularWrap.appendChild(nifLbl);
+            titularWrap.appendChild(nifInput);
+            titularWrap.appendChild(otroStatus);
+            titularWrap.appendChild(errEl);
+            // El <select> nativo no se abre bien en la UI inyectada: lo convertimos
+            // en el desplegable custom que sí funciona (botón + menú).
+            if (typeof enhanceSelectWithFixedDropdown === 'function') {
+                enhanceSelectWithFixedDropdown(select);
+            }
+            setTimeout(syncFromSelect, 0);
+        }
+
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.textContent = cancelText;
+        cancelBtn.style.cssText = 'border:1px solid #d1d5db;background:#fff;color:#111827;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;';
+        const okBtn = document.createElement('button');
+        okBtn.type = 'button';
+        okBtn.textContent = confirmText;
+        okBtn.style.cssText = 'border:none;background:#2563eb;color:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px;font-weight:600;';
+
+        const onKeyDown = (evt) => {
+            if (evt.key === 'Escape') { evt.preventDefault(); closeAndResolve(null); }
+        };
+        const closeAndResolve = (value) => {
+            document.removeEventListener('keydown', onKeyDown, true);
+            overlay.remove();
+            resolve(value);
+        };
+        document.addEventListener('keydown', onKeyDown, true);
+
+        closeX.addEventListener('click', () => closeAndResolve(null));
+        cancelBtn.addEventListener('click', () => closeAndResolve({ create: false }));
+        overlay.addEventListener('click', (evt) => { if (evt.target === overlay) closeAndResolve(null); });
+
+        okBtn.addEventListener('click', async () => {
+            if (!multi) { closeAndResolve({ create: true, titular: null }); return; }
+            const sel = select.value;
+            let nif = nifInput.value.trim();
+            if (sel === '__otro__') {
+                const nombre = otroNombre.value.trim();
+                if (!nombre) { errEl.textContent = 'Introduce el nombre del titular.'; otroNombre.focus(); return; }
+                if (!nif) {
+                    try {
+                        const apiKey = await _orbisGetApiKey();
+                        if (apiKey) {
+                            const resp = await chrome.runtime.sendMessage({ action: 'lookupPassengerNif', apiKey, name: nombre });
+                            if (resp && resp.status === 'success' && resp.nif) { nif = resp.nif; nifInput.value = nif; }
+                        }
+                    } catch (_) { /* silencioso */ }
+                }
+                if (!nif) { errEl.textContent = 'Introduce el NIF del titular.'; nifInput.focus(); return; }
+                closeAndResolve({ create: true, titular: { tipo: 'otro', nombre, nif } });
+                return;
+            }
+            const idx = parseInt(sel, 10);
+            const nombre = paxName(paxList[idx] || {});
+            if (!nif) { errEl.textContent = 'El titular necesita NIF. Introdúcelo.'; nifInput.focus(); return; }
+            closeAndResolve({ create: true, titular: { tipo: 'pasajero', pax_index: idx, nombre, nif } });
+        });
+
+        modal.appendChild(closeX);
+        modal.appendChild(h);
+        modal.appendChild(p);
+        if (multi) modal.appendChild(titularWrap);
+        actions.appendChild(cancelBtn);
+        actions.appendChild(okBtn);
         modal.appendChild(actions);
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
