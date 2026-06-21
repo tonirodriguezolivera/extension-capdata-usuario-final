@@ -3199,11 +3199,13 @@ function buildMultiEditableForm(ui, reservationsData) {
             const key = e.target.getAttribute('data-key');
 
             if (resIdx !== null && paxIdx !== null && key && reservationsData[resIdx]) {
-                const val = (key === 'is_residente' || key === 'is_familia_numerosa' || key === 'residente_fam_numerosa')
-                    ? (e.target.value === 'true')
-                    : (key === 'num_billete'
-                        ? normalizeTicketNumberValue(e.target.value)
-                        : e.target.value);
+                const val = (e.target.type === 'checkbox')
+                    ? e.target.checked
+                    : ((key === 'is_residente' || key === 'is_familia_numerosa' || key === 'residente_fam_numerosa')
+                        ? (e.target.value === 'true')
+                        : (key === 'num_billete'
+                            ? normalizeTicketNumberValue(e.target.value)
+                            : e.target.value));
                 if (key === 'num_billete') {
                     e.target.value = val;
                 }
@@ -3239,8 +3241,11 @@ function buildMultiEditableForm(ui, reservationsData) {
     }
 
     // Autorrelleno del NIF de los pasajeros desde CapData (por nombre), para que
-    // Orbis identifique correctamente al titular del servicio.
-    if (typeof autofillPassengerNifs === 'function') {
+    // Orbis identifique correctamente al titular del servicio. SOLO con Orbis activo:
+    // con otras integraciones (o ninguna) el NIF del pasajero ni se muestra ni se busca.
+    const _orbisActiveForNif = cachedOrbiswebStatus
+        && (typeof cachedIntegrationVisibility === 'undefined' || cachedIntegrationVisibility.orbisweb !== false);
+    if (_orbisActiveForNif && typeof autofillPassengerNifs === 'function') {
         autofillPassengerNifs();
     }
 }
@@ -5218,6 +5223,38 @@ function createFieldElement(fieldName, value, index, options = {}) {
                 </div>`
                 : '';
 
+            // Orbis Web: el NIF del pasajero y el checkbox "titular de su propio
+            // servicio" SOLO se muestran (y el NIF solo se autorrellena) si la
+            // integración Orbis está activa. Con otras integraciones, o ninguna, no se
+            // ven ni se busca el NIF. Checkbox por defecto DESMARCADO: si no se marca, el
+            // titular del servicio de este pasajero será el titular del expediente.
+            const orbisActiveForPaxFields = (typeof cachedOrbiswebStatus !== 'undefined' && cachedOrbiswebStatus)
+                && (typeof cachedIntegrationVisibility === 'undefined' || cachedIntegrationVisibility.orbisweb !== false);
+            const nifFieldHtml = orbisActiveForPaxFields
+                ? `
+                <!-- NIF / Documento (autorrellenado por nombre desde CapData; editable) -->
+                <div class="passenger-grid">
+                    <div class="passenger-field-block">
+                        <label class="passenger-field-label">NIF / Documento:</label>
+                        <input type="text" class="pax-data-input passenger-field-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="nif" value="${pax.nif || pax.documento || pax.dni || ''}" placeholder="NIF del pasajero">
+                    </div>
+                    <div class="passenger-field-spacer" aria-hidden="true"></div>
+                </div>`
+                : '';
+            const titularServicioHtml = orbisActiveForPaxFields
+                ? `
+                <!-- Orbis: ¿este pasajero es titular de su propio servicio? (se factura a su NIF) -->
+                <div class="passenger-grid">
+                    <div class="passenger-field-block">
+                        <label class="passenger-field-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;">
+                            <input type="checkbox" class="pax-data-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="es_titular_servicio" ${pax.es_titular_servicio ? 'checked' : ''} style="width:auto;margin:0;flex:0 0 auto;cursor:pointer;">
+                            <span>Titular de su propio servicio</span>
+                        </label>
+                    </div>
+                    <div class="passenger-field-spacer" aria-hidden="true"></div>
+                </div>`
+                : '';
+
             paxDiv.innerHTML = `
                 <div class="passenger-header">
                     <span>Pasajero ${paxIndex + 1}: ${pax.nombre_pax || ''}</span>
@@ -5240,14 +5277,8 @@ function createFieldElement(fieldName, value, index, options = {}) {
                     </div>
                 </div>
 
-                <!-- NIF / Documento (autorrellenado por nombre desde CapData; editable) -->
-                <div class="passenger-grid">
-                    <div class="passenger-field-block">
-                        <label class="passenger-field-label">NIF / Documento:</label>
-                        <input type="text" class="pax-data-input passenger-field-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="nif" value="${pax.nif || pax.documento || pax.dni || ''}" placeholder="NIF del pasajero">
-                    </div>
-                    <div class="passenger-field-spacer" aria-hidden="true"></div>
-                </div>
+                ${nifFieldHtml}
+                ${titularServicioHtml}
 
                 <!-- Nº Billete + Residente Fam Numerosa -->
                 <div class="passenger-grid">
@@ -5634,7 +5665,9 @@ async function collectSingleFieldData(index) {
             ).forEach(inp => {
                 const key = inp.getAttribute('data-key');
                 if (!key || key === 'num_billete') return;
-                if (key === 'residente_fam_numerosa' || key === 'is_residente' || key === 'is_familia_numerosa') {
+                if (inp.type === 'checkbox') {
+                    passengerData[key] = inp.checked;
+                } else if (key === 'residente_fam_numerosa' || key === 'is_residente' || key === 'is_familia_numerosa') {
                     passengerData[key] = (inp.value === 'true');
                 } else {
                     passengerData[key] = (inp.value || '').trim();
