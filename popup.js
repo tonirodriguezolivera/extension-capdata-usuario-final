@@ -2831,10 +2831,93 @@ async function autofillPassengerNifs() {
     } catch (e) { /* silencioso */ }
 }
 
+// === ORBISWEB Fase 2: desplegable de PRODUCTO del proveedor ===
+// Solo con OrbisWeb activo. Resuelve el proveedor en el backend (por nombre/NIF o
+// numIdProveedor) y carga sus productos; el elegido se guarda en
+// reservation.num_id_producto y viaja como productoProveedor en la línea de servicio.
+function buildOrbiswebProductSelector(data, reservationsData) {
+    const container = document.createElement('div');
+    container.className = 'orbisweb-product-selector erp-fields-block';
+    container.style.cssText = 'display:none; margin:10px 0; padding:10px 12px; border:1px solid #bfdbfe; border-radius:8px; background:#f0f9ff;';
+
+    const label = document.createElement('label');
+    label.textContent = 'Producto del proveedor (Orbis)';
+    label.style.cssText = 'display:block; font-size:12px; font-weight:600; color:#0369a1; margin-bottom:4px;';
+    container.appendChild(label);
+
+    const select = document.createElement('select');
+    select.className = 'orbisweb-product-select';
+    select.style.cssText = 'width:100%; padding:6px 8px; border:1px solid #93c5fd; border-radius:6px; font-size:13px; background:#fff;';
+    container.appendChild(select);
+
+    const status = document.createElement('div');
+    status.style.cssText = 'font-size:11px; color:#64748b; margin-top:4px;';
+    container.appendChild(status);
+
+    select.addEventListener('change', () => {
+        data.num_id_producto = select.value || '';
+        try { chrome.storage.local.set({ savedReservationData: reservationsData }); } catch (e) {}
+    });
+
+    // Usar el mismo dropdown custom posicionado que el resto de selects del form
+    // (el <select> nativo se renderiza flotando mal dentro del popup).
+    if (typeof enhanceSelectWithFixedDropdown === 'function') {
+        try { enhanceSelectWithFixedDropdown(select); } catch (e) {}
+    }
+
+    loadOrbiswebProducts(data, select, status, container);
+    return container;
+}
+
+async function loadOrbiswebProducts(data, select, status, container) {
+    const apiKey = (document.getElementById('apiKey')?.value || '').trim();
+    if (!apiKey) return;
+    const numId = data.numIdProveedor || data.num_id_proveedor || '';
+    const proveedor = data.proveedor_nombre || data.proveedor || data.via || '';
+    const nif = data.proveedor_documento || data.provider_nif || '';
+    if (!numId && !proveedor && !nif) return;
+    container.style.display = 'block';
+    status.textContent = 'Cargando productos del proveedor…';
+    try {
+        const url = new URL(`${POPUP_API_BASE_URL}/api/me/provider-products`);
+        if (numId) url.searchParams.set('num_id_proveedor', numId);
+        if (proveedor) url.searchParams.set('proveedor', proveedor);
+        if (nif) url.searchParams.set('nif', nif);
+        const resp = await fetch(url.toString(), { headers: { 'X-API-Key': apiKey } });
+        const json = await resp.json().catch(() => ({}));
+        const products = (json && Array.isArray(json.products)) ? json.products : [];
+        if (!products.length) { container.style.display = 'none'; return; }
+        select.innerHTML = '';
+        const optDef = document.createElement('option');
+        optDef.value = '';
+        optDef.textContent = '— Producto por defecto del proveedor —';
+        select.appendChild(optDef);
+        let preselect = '';
+        products.forEach((p) => {
+            const opt = document.createElement('option');
+            opt.value = String(p.num_id_producto);
+            opt.textContent = (p.nombre || p.num_id_producto) + (p.tipo ? ' · ' + p.tipo : '');
+            select.appendChild(opt);
+            if (p.is_default && !preselect) preselect = String(p.num_id_producto);
+        });
+        if (!preselect && products.length === 1) preselect = String(products[0].num_id_producto);
+        if (data.num_id_producto) preselect = String(data.num_id_producto);
+        select.value = preselect || '';
+        data.num_id_producto = select.value || '';
+        // Sincroniza la etiqueta del trigger custom tras la carga asíncrona.
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        const provTxt = json.num_id_proveedor ? ` · proveedor ${json.num_id_proveedor}` : '';
+        status.textContent = `${products.length} producto(s)${provTxt}. Elige uno o deja el predeterminado.`;
+        container.style.display = 'block';
+    } catch (e) {
+        container.style.display = 'none';
+    }
+}
+
 function buildMultiEditableForm(ui, reservationsData) {
     // 1. Limpiar el contenedor de cualquier formulario anterior.
     closeActiveCustomSelectDropdown();
-    ui.standardFieldsContainer.innerHTML = ''; 
+    ui.standardFieldsContainer.innerHTML = '';
     
     // 2. Iterar sobre cada reserva encontrada y construir su sección en el formulario.
     reservationsData.forEach((data, index) => {
@@ -3097,9 +3180,14 @@ function buildMultiEditableForm(ui, reservationsData) {
                 });
             }
             fieldsDiv.style.marginTop = '10px';
+            // --- ORBISWEB (Fase 2): desplegable de PRODUCTO del proveedor, dentro de la sección ---
+            const orbisSectionContent = document.createElement('div');
+            const orbisProductSelector = buildOrbiswebProductSelector(data, reservationsData);
+            if (orbisProductSelector) orbisSectionContent.appendChild(orbisProductSelector);
+            orbisSectionContent.appendChild(fieldsDiv);
             const pipelineSection = createCollapsibleFieldsSection(
                 getActiveIntegrationSectionTitle('ORBISWEB'),
-                fieldsDiv,
+                orbisSectionContent,
                 'pipeline-fields-container erp-fields-block field-group-details'
             );
             if (pipelineSection) wrapper.appendChild(pipelineSection);
@@ -4661,6 +4749,15 @@ function lockCapturedFormFields(ui) {
         .querySelectorAll('input, select, textarea')
         .forEach((field) => {
             field.disabled = true;
+        });
+    // Los <select> mejorados se manejan con un botón "trigger" (capdata-select-trigger);
+    // deshabilitarlo también para que no se pueda cambiar el valor tras guardar.
+    ui.standardFieldsContainer
+        .querySelectorAll('.capdata-select-trigger')
+        .forEach((btn) => {
+            btn.disabled = true;
+            btn.style.cursor = 'not-allowed';
+            btn.style.opacity = '0.6';
         });
 }
 
