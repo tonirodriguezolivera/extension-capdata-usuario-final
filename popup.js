@@ -5320,11 +5320,10 @@ function createFieldElement(fieldName, value, index, options = {}) {
                 </div>`
                 : '';
 
-            // Orbis Web: el NIF del pasajero y el checkbox "titular de su propio
-            // servicio" SOLO se muestran (y el NIF solo se autorrellena) si la
-            // integración Orbis está activa. Con otras integraciones, o ninguna, no se
-            // ven ni se busca el NIF. Checkbox por defecto DESMARCADO: si no se marca, el
-            // titular del servicio de este pasajero será el titular del expediente.
+            // Orbis Web: el NIF del pasajero SOLO se muestra (y se autorrellena desde
+            // CapData) si la integración Orbis está activa. Con otras integraciones, o
+            // ninguna, no se ve ni se busca el NIF. El servicio se factura siempre al
+            // titular del expediente.
             const orbisActiveForPaxFields = (typeof cachedOrbiswebStatus !== 'undefined' && cachedOrbiswebStatus)
                 && (typeof cachedIntegrationVisibility === 'undefined' || cachedIntegrationVisibility.orbisweb !== false);
             const nifFieldHtml = orbisActiveForPaxFields
@@ -5338,20 +5337,6 @@ function createFieldElement(fieldName, value, index, options = {}) {
                     <div class="passenger-field-spacer" aria-hidden="true"></div>
                 </div>`
                 : '';
-            const titularServicioHtml = orbisActiveForPaxFields
-                ? `
-                <!-- Orbis: ¿este pasajero es titular de su propio servicio? (se factura a su NIF) -->
-                <div class="passenger-grid">
-                    <div class="passenger-field-block">
-                        <label class="passenger-field-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;">
-                            <input type="checkbox" class="pax-data-input" data-res-index="${index}" data-pax-index="${paxIndex}" data-key="es_titular_servicio" ${pax.es_titular_servicio ? 'checked' : ''} style="width:auto;margin:0;flex:0 0 auto;cursor:pointer;">
-                            <span>Titular de su propio servicio</span>
-                        </label>
-                    </div>
-                    <div class="passenger-field-spacer" aria-hidden="true"></div>
-                </div>`
-                : '';
-
             paxDiv.innerHTML = `
                 <div class="passenger-header">
                     <span>Pasajero ${paxIndex + 1}: ${pax.nombre_pax || ''}</span>
@@ -5375,7 +5360,6 @@ function createFieldElement(fieldName, value, index, options = {}) {
                 </div>
 
                 ${nifFieldHtml}
-                ${titularServicioHtml}
 
                 <!-- Nº Billete + Residente Fam Numerosa -->
                 <div class="passenger-grid">
