@@ -22,6 +22,28 @@ async function getAirportsIataMap() {
     }
     return _airportsIataCache;
 }
+// Tabla código IATA → nombre de aerolínea (invertida desde airlines-iata.json, que es nombre → código).
+let _airlinesNameByCodeCache = null;
+async function getAirlinesNameByCodeMap() {
+    if (_airlinesNameByCodeCache) return _airlinesNameByCodeCache;
+    const byCode = {};
+    try {
+        const url = chrome.runtime.getURL('airlines-iata.json');
+        const res = await fetch(url);
+        const nameToCode = await res.json();
+        const titleCase = (s) => String(s).replace(/\b\w/g, (c) => c.toUpperCase());
+        for (const [name, code] of Object.entries(nameToCode || {})) {
+            const c = String(code || '').toUpperCase().trim();
+            if (!c) continue;
+            // Conservar el primer nombre visto por código (suele ser la variante más legible).
+            if (!byCode[c]) byCode[c] = titleCase(name);
+        }
+    } catch (e) {
+        console.warn('BACKGROUND: No se pudo cargar airlines-iata.json:', e);
+    }
+    _airlinesNameByCodeCache = byCode;
+    return _airlinesNameByCodeCache;
+}
 function normalizeAirportForLookup(str) {
     if (!str || typeof str !== 'string') return '';
     return str.trim().toLowerCase()
@@ -52,10 +74,13 @@ async function extractDataUsingMappings(tabId, mappingsNormal, mappingsOneWay, d
         const brandName = isDoubleTLD ? p[p.length - 3] : p[p.length - 2];
         const cleanDomainName = (isIpHost || isLocalHost) ? host : (brandName || p[0]);
 
+        // Tabla código IATA → nombre de aerolínea (para derivar el proveedor desde el nº de vuelo).
+        const airlineNameByCode = await getAirlinesNameByCodeMap();
+
         // --- NIVELES 1 Y 2: Ejecución de selectores conocidos y salto estructural en el cliente ---
         const extractionResults = await chrome.scripting.executeScript({
             target: { tabId: tabId },
-            func: (mappingsNormal, mappingsOneWay, cleanDomain, serviceType, shouldLeaveIssueDateEmpty, customSchema, fieldRegex) => {
+            func: (mappingsNormal, mappingsOneWay, cleanDomain, serviceType, shouldLeaveIssueDateEmpty, customSchema, fieldRegex, airlineNameByCode) => {
                 
                 // --- HELPER 1: Motor de búsqueda blindado (Soporta :contains y evita SyntaxError) ---
                 const smartQuerySelector = (selector) => {
@@ -869,11 +894,36 @@ async function extractDataUsingMappings(tabId, mappingsNormal, mappingsOneWay, d
                 // El estado booking siempre debe ser "Confirmed"
                 currentFields['estado_booking'] = 'Confirmed';
 
-                // Fallback proveedor: si no se pudo mapear, usar dominio/subdominio actual.
-                const hostnameWithoutWww = (window.location.hostname || '').replace(/^www\./i, '').trim();
+                // --- NIVEL 2: derivar aerolínea desde el prefijo del nº de vuelo ---
+                // El código IATA es el designador de 2 caracteres al inicio del nº de vuelo:
+                // 2 letras (BA, FR, VY), letra+dígito (U2, W6, I2) o dígito+letra. Se convierte
+                // a nombre con airlineNameByCode; si el código no está en la tabla, se usa el código.
+                const airlineCodeFromFlight = (flightNum) => {
+                    if (!flightNum) return '';
+                    const s = String(flightNum).trim().toUpperCase().replace(/\s+/g, '');
+                    const m = s.match(/^([A-Z]{2}|[A-Z]\d|\d[A-Z])(?=\d)/);
+                    return m ? m[1] : '';
+                };
+                const airlineNameFromFlightFields = (...flightFields) => {
+                    for (const f of flightFields) {
+                        const code = airlineCodeFromFlight(currentFields[f]);
+                        if (code) return (airlineNameByCode && airlineNameByCode[code]) ? airlineNameByCode[code] : code;
+                    }
+                    return '';
+                };
+                const idaAirlineName = airlineNameFromFlightFields('num_vuelo_ida', 'Ida_Codigo');
+                const vueltaAirlineName = airlineNameFromFlightFields('num_vuelo_vuelta', 'Vuelta_Codigo');
+                // Portales agregadores donde el dominio NO es la aerolínea (p. ej. IAG): ahí
+                // también derivamos aerolinea_ida/aerolinea_vuelta del nº de vuelo.
+                const hostnameLower = (window.location.hostname || '').toLowerCase();
+                const aggregatorBrands = ['iag'];
+                const isAggregatorPortal = aggregatorBrands.includes(String(cleanDomain || '').toLowerCase()) || /(^|\.)iag\.cloud$/.test(hostnameLower);
+
+                // Fallback proveedor: 1) mapeado  2) prefijo nº de vuelo de ida  3) dominio/subdominio.
+                const hostnameWithoutWww = hostnameLower.replace(/^www\./i, '').trim();
                 const providerFallback = cleanDomain || hostnameWithoutWww;
                 if (!currentFields['proveedor_nombre'] || currentFields['proveedor_nombre'].trim() === '') {
-                    currentFields['proveedor_nombre'] = providerFallback;
+                    currentFields['proveedor_nombre'] = idaAirlineName || providerFallback;
                 }
                 // El campo 'via' siempre debe llevar dominio/subdominio del portal capturado.
                 currentFields['via'] = providerFallback;
@@ -890,14 +940,15 @@ async function extractDataUsingMappings(tabId, mappingsNormal, mappingsOneWay, d
                         currentFields['forma_pago'] = 'Cash';
                     }
                     if (!currentFields['aerolinea_ida'] || currentFields['aerolinea_ida'].trim() === '') {
-                        currentFields['aerolinea_ida'] = cleanDomain;
+                        // En agregadores (IAG) usar la aerolínea del nº de vuelo de ida; si no, el dominio.
+                        currentFields['aerolinea_ida'] = (isAggregatorPortal && idaAirlineName) ? idaAirlineName : cleanDomain;
                     }
                     if (!currentFields['Ida_Compania'] || currentFields['Ida_Compania'].trim() === '') {
                         currentFields['Ida_Compania'] = cleanDomain;
                     }
                     if (hasReturnData) {
                         if (!currentFields['aerolinea_vuelta'] || currentFields['aerolinea_vuelta'].trim() === '') {
-                            currentFields['aerolinea_vuelta'] = cleanDomain;
+                            currentFields['aerolinea_vuelta'] = (isAggregatorPortal && vueltaAirlineName) ? vueltaAirlineName : cleanDomain;
                         }
                         if (!currentFields['Vuelta_Compania'] || currentFields['Vuelta_Compania'].trim() === '') {
                             currentFields['Vuelta_Compania'] = cleanDomain;
@@ -913,7 +964,7 @@ async function extractDataUsingMappings(tabId, mappingsNormal, mappingsOneWay, d
 
                 return results;
             },
-            args: [mappingsNormal, mappingsOneWay, cleanDomainName, reservationType, shouldLeaveIssueDateEmpty, customSchema, fieldRegex || {}]
+            args: [mappingsNormal, mappingsOneWay, cleanDomainName, reservationType, shouldLeaveIssueDateEmpty, customSchema, fieldRegex || {}, airlineNameByCode || {}]
         });
 
         const result = extractionResults[0]?.result;
